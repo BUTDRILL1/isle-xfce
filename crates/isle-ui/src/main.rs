@@ -1,0 +1,72 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 zickrian
+
+//! `isle-ui`: Native floating notch application for XFCE/X11.
+
+mod runtime;
+mod shader;
+mod spring;
+mod window;
+mod x11;
+
+use std::cell::RefCell;
+use std::env;
+
+use gtk::{gdk, gio, glib, prelude::*};
+use gtk4 as gtk;
+use log::info;
+
+use crate::window::FloatingWindow;
+
+const APP_ID: &str = "io.github.zickrian.isle.Ui";
+
+thread_local! {
+    static ACTIVE_WINDOW: RefCell<Option<FloatingWindow>> = const { RefCell::new(None) };
+}
+
+fn main() -> glib::ExitCode {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+
+    // SAFETY: Called before GTK starts and before any thread is spawned.
+    // Explicitly enforce the X11 backend for GDK on Linux desktop.
+    unsafe { env::set_var("GDK_BACKEND", "x11") };
+
+    let app = gtk::Application::builder()
+        .application_id(APP_ID)
+        .flags(gio::ApplicationFlags::NON_UNIQUE)
+        .build();
+
+    app.connect_startup(|_| {
+        load_css();
+    });
+
+    app.connect_activate(|app| {
+        match FloatingWindow::new(app) {
+            Ok(floating) => {
+                floating.present();
+                ACTIVE_WINDOW.with(|cell| {
+                    *cell.borrow_mut() = Some(floating);
+                });
+                info!("Floating notch window activated and presented");
+            }
+            Err(err) => {
+                log::error!("Failed to create floating notch window: {err}");
+                app.quit();
+            }
+        }
+    });
+
+    app.run()
+}
+
+/// Injects Isle's custom CSS into the GTK display provider.
+fn load_css() {
+    let provider = gtk::CssProvider::new();
+    provider.load_from_string(include_str!("style.css"));
+    gtk::style_context_add_provider_for_display(
+        &gdk::Display::default().expect("GTK has no default display"),
+        &provider,
+        gtk::STYLE_PROVIDER_PRIORITY_USER + 1,
+    );
+}
+

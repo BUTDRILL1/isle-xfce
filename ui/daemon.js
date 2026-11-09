@@ -1,0 +1,329 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 zickrian
+
+// Client for isled, the Rust service that does the actual work.
+// Ported for Isle XFCE GTK4 runtime.
+
+import Gio from 'gi://Gio';
+import GLib from 'gi://GLib';
+
+export class EventEmitter {
+    constructor() {
+        this._listeners = new Map();
+        this._nextId = 1;
+    }
+
+    connect(signal, callback) {
+        if (!this._listeners.has(signal))
+            this._listeners.set(signal, new Map());
+        const id = this._nextId++;
+        this._listeners.get(signal).set(id, callback);
+        return id;
+    }
+
+    disconnect(id) {
+        for (const map of this._listeners.values()) {
+            if (map.delete(id))
+                return;
+        }
+    }
+
+    disconnectAll() {
+        this._listeners.clear();
+    }
+
+    emit(signal, ...args) {
+        const map = this._listeners.get(signal);
+        if (!map)
+            return;
+        for (const cb of [...map.values()]) {
+            try {
+                cb(this, ...args);
+            } catch (e) {
+                console.error(`Error in event listener for ${signal}:`, e);
+            }
+        }
+    }
+}
+
+const BUS_NAME = 'io.github.zickrian.isle.Daemon';
+const OBJECT_PATH = '/io/github/zickrian/isle/Daemon';
+
+const node = (name, body) =>
+    `<node><interface name="io.github.zickrian.isle.${name}">${body}</interface></node>`;
+
+const INTERFACES = {
+    media: {
+        xml: node('Media1', `
+            <method name="PlayPause"/>
+            <method name="Next"/>
+            <method name="Previous"/>
+            <method name="SetPosition"><arg name="position_us" type="x" direction="in"/></method>
+            <method name="Raise"/>
+            <method name="Choose"><arg name="name" type="s" direction="in"/></method>
+            <method name="Dismiss"/>
+            <method name="SetLyrics"><arg name="enabled" type="b" direction="in"/></method>
+            <method name="SetWatching"><arg name="watching" type="b" direction="in"/></method>
+            <property name="NowPlaying" type="s" access="read"/>
+            <property name="Lyrics" type="s" access="read"/>
+            <property name="Players" type="s" access="read"/>`),
+        properties: { NowPlaying: 'nowPlaying', Lyrics: 'lyrics', Players: 'players' },
+    },
+    pomodoro: {
+        xml: node('Pomodoro1', `
+            <method name="Start"/>
+            <method name="Pause"/>
+            <method name="Stop"/>
+            <method name="Skip"/>
+            <method name="StartPhase"><arg name="phase" type="s" direction="in"/></method>
+            <method name="SetConfig"><arg name="config" type="s" direction="in"/></method>
+            <signal name="PhaseFinished"><arg name="finished" type="s"/><arg name="next" type="s"/></signal>
+            <property name="State" type="s" access="read"/>
+            <property name="Config" type="s" access="read"/>`),
+        properties: { State: 'pomodoro', Config: 'pomodoroConfig' },
+    },
+    system: {
+        xml: node('System1', `
+            <signal name="Event"><arg name="event" type="s"/></signal>
+            <property name="State" type="s" access="read"/>`),
+        properties: { State: 'system' },
+    },
+    usage: {
+        xml: node('Usage1', `
+            <method name="SetConfig"><arg name="config" type="s" direction="in"/></method>
+            <method name="Refresh"/>
+            <signal name="Alert"><arg name="provider" type="s"/><arg name="window" type="s"/><arg name="percent" type="d"/><arg name="resets_at_ms" type="x"/></signal>
+            <property name="Usage" type="s" access="read"/>`),
+        properties: { Usage: 'usage' },
+    },
+    todo: {
+        xml: node('Todo1', `
+            <method name="Add"><arg name="text" type="s" direction="in"/><arg type="t" direction="out"/></method>
+            <method name="SetDone"><arg name="id" type="t" direction="in"/><arg name="done" type="b" direction="in"/></method>
+            <method name="Rename"><arg name="id" type="t" direction="in"/><arg name="title" type="s" direction="in"/></method>
+            <method name="Remove"><arg name="id" type="t" direction="in"/></method>
+            <method name="ClearDone"/>
+            <property name="Items" type="s" access="read"/>`),
+        properties: { Items: 'tasks' },
+    },
+    reminders: {
+        xml: node('Reminders1', `
+            <method name="Add"><arg name="delay_ms" type="t" direction="in"/><arg name="text" type="s" direction="in"/><arg type="t" direction="out"/></method>
+            <method name="Dismiss"><arg name="id" type="t" direction="in"/></method>
+            <property name="Items" type="s" access="read"/>`),
+        properties: { Items: 'reminders' },
+    },
+};
+
+const PLAIN = new Set(['updates']);
+
+export class Daemon extends EventEmitter {
+    constructor() {
+        super();
+        this.state = {};
+        this._raw = {};
+        this._proxies = {};
+        this._inFlight = new Map();
+        this._cancellable = new Gio.Cancellable();
+
+        for (const [name, { xml, properties }] of Object.entries(INTERFACES)) {
+            for (const key of Object.values(properties))
+                this.state[key] = null;
+            this._connect(name, xml, properties);
+        }
+
+        this.running = false;
+        this._nameWatch = Gio.bus_watch_name(
+            Gio.BusType.SESSION,
+            BUS_NAME,
+            Gio.BusNameWatcherFlags.NONE,
+            () => this._setRunning(true),
+            () => this._setRunning(false)
+        );
+        this.start();
+    }
+
+    _setRunning(running) {
+        if (running === this.running)
+            return;
+        this.running = running;
+        this.emit('running-changed');
+    }
+
+    start() {
+        Gio.DBus.session.call(
+            'org.freedesktop.DBus',
+            '/org/freedesktop/DBus',
+            'org.freedesktop.DBus',
+            'StartServiceByName',
+            new GLib.Variant('(su)', [BUS_NAME, 0]),
+            null,
+            Gio.DBusCallFlags.NONE,
+            -1,
+            this._cancellable,
+            (connection, result) => {
+                try {
+                    connection.call_finish(result);
+                } catch (e) {
+                    if (!e.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED)) {
+                        // isled might already be running
+                    }
+                }
+            }
+        );
+    }
+
+    _connect(name, xml, properties) {
+        const DaemonProxy = Gio.DBusProxy.makeProxyWrapper(xml);
+        new DaemonProxy(Gio.DBus.session, BUS_NAME, OBJECT_PATH, (proxy, error) => {
+            if (error) {
+                if (!error.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
+                    console.warn(`Isle: could not create the ${name} proxy: ${error.message}`);
+                return;
+            }
+            this._proxies[name] = proxy;
+
+            const refresh = () => {
+                for (const [property, key] of Object.entries(properties))
+                    this._update(key, proxy[property]);
+            };
+
+            proxy.connect('g-properties-changed', (_proxy, changed, invalidated) => {
+                for (const property of [...Object.keys(changed.unpack()), ...invalidated]) {
+                    if (property in properties)
+                        this._update(properties[property], proxy[property]);
+                }
+            });
+
+            proxy.connect('notify::g-name-owner', refresh);
+            proxy.connect('notify::g-name-owner', () => {
+                if (proxy.g_name_owner)
+                    this.emit('appeared', name);
+            });
+
+            proxy.connect('g-signal', (_proxy, _sender, signal, parameters) =>
+                this._onSignal(name, signal, parameters.deep_unpack()));
+
+            refresh();
+            if (proxy.g_name_owner)
+                this.emit('appeared', name);
+        }, this._cancellable, Gio.DBusProxyFlags.DO_NOT_AUTO_START_AT_CONSTRUCTION);
+    }
+
+    hold() {
+        this._held ??= [];
+    }
+
+    release() {
+        const held = this._held ?? [];
+        this._held = null;
+        for (const args of held)
+            this.emit(...args);
+    }
+
+    emit(...args) {
+        if (!this._held)
+            return super.emit(...args);
+        if (args[0] !== 'changed' || !this._held.some(([name, key]) => name === 'changed' && key === args[1]))
+            this._held.push(args);
+        return undefined;
+    }
+
+    _update(key, json) {
+        if (key in this._raw && this._raw[key] === json)
+            return;
+        this._raw[key] = json;
+        let value = null;
+        try {
+            value = !json ? null : PLAIN.has(key) ? json : JSON.parse(json);
+        } catch (e) {
+            console.warn(`Isle: invalid ${key} from isled: ${e.message}`);
+        }
+        this.state[key] = value;
+        this.emit('changed', key);
+    }
+
+    _onSignal(name, signal, args) {
+        switch (signal) {
+        case 'PhaseFinished':
+            this.emit('pomodoro-finished', ...args);
+            break;
+        case 'Alert':
+            this.emit('usage-alert', ...args);
+            break;
+        case 'Event':
+            try {
+                this.emit(name === 'agents' ? 'agent-event' : 'system-event', JSON.parse(args[0]));
+            } catch (e) {
+                console.warn(`Isle: invalid ${name} event: ${e.message}`);
+            }
+            break;
+        }
+    }
+
+    call(name, method, ...args) {
+        return this.attempt(name, method, ...args).then(({ result }) => result);
+    }
+
+    attempt(name, method, ...args) {
+        return this._attempt(name, method, args, false);
+    }
+
+    attemptQuietly(name, method, ...args) {
+        return this._attempt(name, method, args, true);
+    }
+
+    _attempt(name, method, args, quiet) {
+        const proxy = this._proxies[name];
+        if (!proxy)
+            return Promise.resolve({ result: null, error: null });
+        return new Promise(resolve => {
+            try {
+                proxy[`${method}Remote`](...args, (result, error) => {
+                    this._settle(proxy);
+                    if (this._destroyed) {
+                        resolve({ result: null, error: null });
+                        return;
+                    }
+                    if (error && !quiet)
+                        console.warn(`Isle: ${method} failed: ${error.message}`);
+                    const remoteName = error ? Gio.DBusError.get_remote_error(error) : null;
+                    const refused = ['org.freedesktop.DBus.Error.Failed', 'org.freedesktop.DBus.Error.InvalidArgs'].includes(remoteName);
+                    resolve({
+                        result: error ? null : result,
+                        error: refused ? error.message.replace(/^GDBus\.Error:[\w.]+:\s*/, '') : null,
+                        unknownMethod: remoteName === 'org.freedesktop.DBus.Error.UnknownMethod',
+                    });
+                });
+                this._inFlight.set(proxy, (this._inFlight.get(proxy) ?? 0) + 1);
+            } catch (e) {
+                console.warn(`Isle: ${method} failed: ${e.message}`);
+                resolve({ result: null, error: null });
+            }
+        });
+    }
+
+    _settle(proxy) {
+        const left = (this._inFlight.get(proxy) ?? 1) - 1;
+        if (left > 0) {
+            this._inFlight.set(proxy, left);
+            return;
+        }
+        this._inFlight.delete(proxy);
+        if (this._destroyed)
+            proxy.run_dispose();
+    }
+
+    destroy() {
+        this._destroyed = true;
+        this.disconnectAll();
+        this._cancellable.cancel();
+        Gio.bus_unwatch_name(this._nameWatch);
+        for (const proxy of Object.values(this._proxies)) {
+            if (!this._inFlight.has(proxy))
+                proxy.run_dispose();
+        }
+        this._proxies = {};
+    }
+}
+

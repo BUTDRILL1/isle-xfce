@@ -1,0 +1,48 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+/* Isle XFCE Native UI Stylesheet */
+
+window.isle-window {
+  background-color: transparent;
+  color: #ffffff;
+  font-family: "Inter Variable", "Inter", sans-serif;
+  font-feature-settings: "tnum";
+}
+
+.isle-notch-body {
+  background-color: rgba(28, 28, 30, 0.70);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 18px;
+  padding: 6px 16px;
+  color: #ffffff;
+}
+
+.isle-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #ffffff;
+}
+
+.isle-subtitle {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.65);
+}
+
+.isle-btn {
+  border-radius: 999px;
+  background-color: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  border: none;
+  transition: background-color 120ms ease-out;
+}
+
+.isle-btn:hover {
+  background-color: rgba(255, 255, 255, 0.22);
+}
+
+.isle-btn:active {
+  background-color: rgba(255, 255, 255, 0.32);
+}
+
