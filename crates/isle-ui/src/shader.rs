@@ -46,32 +46,19 @@ vec3 edgeMax(vec3 a, vec3 b) {
 }
 
 vec3 outlineBody(vec2 q) {
-    float gap = u_pill.y;
-    bool lower = gap <= 0.0 || q.y >= 0.5 * (gap + u_body.w);
-    float r = lower ? u_corner.x : u_pill.x;
-    vec2 c = vec2(clamp(q.x, u_body.x + r, u_body.y - r), lower ? min(q.y, u_body.w - r) : max(q.y, gap + r));
+    float r = u_corner.x;
+    vec2 c = vec2(
+        clamp(q.x, u_body.x + r, u_body.y - r),
+        clamp(q.y, u_body.z + r, u_body.w - r)
+    );
     float off = length(q - c);
     if (off > 0.0)
         return vec3(r - off, (q - c) / off);
-    vec3 sides = edgeMin(edgeMin(vec3(q.x - u_body.x, 1.0, 0.0), vec3(u_body.y - q.x, 1.0, 0.0)), vec3(u_body.w - q.y, 0.0, 1.0));
-    return gap > 0.0 ? edgeMin(sides, vec3(q.y - gap, 0.0, 1.0)) : sides;
-}
-
-vec3 outlineFlare(vec2 q, float x, float side) {
-    float sh = u_corner.y;
-    vec2 c = vec2(x - side * sh, u_body.z + sh);
-    float off = max(length(q - c), 0.0001);
-    vec3 arc = edgeMin(vec3(off - sh, (q - c) / off), vec3(c.y - q.y, 0.0, 1.0));
-    return edgeMin(arc, edgeMin(vec3(sh + side * (q.x - x), 1.0, 0.0), vec3(sh - side * (q.x - x), 1.0, 0.0)));
-}
-
-vec3 outlineBeside(vec2 q) {
-    float sh = u_corner.y;
-    vec3 band = edgeMin(edgeMin(vec3(q.x - u_body.x + sh, 1.0, 0.0), vec3(u_body.y + sh - q.x, 1.0, 0.0)),
-        vec3(u_body.z - q.y, 0.0, 1.0));
-    if (sh <= 0.0)
-        return band;
-    return edgeMax(band, edgeMax(outlineFlare(q, u_body.x, 1.0), outlineFlare(q, u_body.y, -1.0)));
+    vec3 sides = edgeMin(
+        edgeMin(vec3(q.x - u_body.x, 1.0, 0.0), vec3(u_body.y - q.x, 1.0, 0.0)),
+        edgeMin(vec3(q.y - u_body.z, 0.0, 1.0), vec3(u_body.w - q.y, 0.0, 1.0))
+    );
+    return sides;
 }
 
 // Sub-pixel analytical anti-aliased edge coverage matching Cairo rasterization
@@ -95,7 +82,7 @@ void main() {
     float pixel = u_frame.z;
     float left = u_body.x, right = u_body.y, top = u_body.z, bottom = u_body.w;
 
-    vec3 edgeAt = edgeMin(edgeMax(outlineBody(p), outlineBeside(p)), vec3(p.y, 0.0, 1.0));
+    vec3 edgeAt = outlineBody(p);
     float inside = edgeAt.x;
     float cover = coverage(edgeAt, pixel);
 
@@ -117,9 +104,9 @@ void main() {
     }
 
     if (u_edge.a > 0.0) {
-        float band = max(0.0, min(inside + 0.5 / pixel, 1.0) - max(inside - 0.5 / pixel, 0.0)) * pixel *
-            clamp(0.5 + (p.y - 1.0) * pixel, 0.0, 1.0);
-        float a = mix(u_edgeAlpha.x, u_edgeAlpha.y, clamp(p.y / max(bottom, 0.001), 0.0, 1.0)) * band;
+        // Slim, clean 1px border uniformly distributed along the entire rounded perimeter
+        float band = max(0.0, min(inside + 0.5 / pixel, 1.0) - max(inside - 0.5 / pixel, 0.0)) * pixel;
+        float a = u_edgeAlpha.x * band;
         color = vec4(u_edge.rgb, 1.0) * a + color * (1.0 - a);
     }
 

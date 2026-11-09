@@ -18,24 +18,24 @@ use crate::shader::ShaderPipeline;
 use crate::spring::{GENTLE_CONFIG, ISLAND_CONFIG, Spring};
 use crate::x11::{get_x11_window, sync_gdk, Error, X11Context};
 
-/// Compact (resting) proportions from upstream controller.js:
-/// - Hanging compact notch: width ~240px, depth 36px, corner 16px, shoulder 10px.
+/// Compact (resting) proportions for clean floating glass panel:
+/// - Resting panel: width 240px, depth 38px, rounded corners 18px, shoulder 0px.
 pub const COMPACT_WIDTH: f64 = 240.0;
 pub const COMPACT_HEIGHT: f64 = 38.0;
-pub const COMPACT_RADIUS: f64 = 16.0;
-pub const COMPACT_SHOULDER: f64 = 10.0;
+pub const COMPACT_RADIUS: f64 = 18.0;
+pub const COMPACT_SHOULDER: f64 = 0.0;
 
-/// Expanded proportions from upstream expanded.js & controller.js:
-/// - Expanded notch: width 600px, height 196px, corner 32px, shoulder 22px.
+/// Expanded proportions for clean floating glass panel:
+/// - Expanded panel: width 600px, height 196px, rounded corners 24px, shoulder 0px.
 pub const EXPANDED_WIDTH: f64 = 600.0;
 pub const EXPANDED_HEIGHT: f64 = 196.0;
-pub const EXPANDED_RADIUS: f64 = 32.0;
-pub const EXPANDED_SHOULDER: f64 = 22.0;
+pub const EXPANDED_RADIUS: f64 = 24.0;
+pub const EXPANDED_SHOULDER: f64 = 0.0;
 
 /// Translucent dark fill matching upstream theme.js for Picom dual-kawase blur.
 const FILL_RGBA: [f32; 4] = [0.03, 0.04, 0.05, 0.40];
 const EDGE_RGBA: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
-const EDGE_ALPHA: [f32; 2] = [0.16, 0.08];
+const EDGE_ALPHA: [f32; 2] = [0.15, 0.15];
 
 /// Manages the floating notch GTK4 window, shader pipeline, and spring animations.
 #[derive(Clone)]
