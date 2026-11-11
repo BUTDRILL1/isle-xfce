@@ -9,6 +9,7 @@ import GObject from 'gi://GObject';
 import Gtk from 'gi://Gtk?version=4.0';
 
 import * as Format from 'file:///home/butarch/Desktop/isle-upstream/gnome-extension/src/format.js';
+import { AssistantView } from './assistant.js';
 import {
     Bars,
     PrivacyDots,
@@ -356,8 +357,62 @@ export const ExpandedView = GObject.registerClass({
             this._pager.set_visible_child(this._pages[this._index]);
         }
 
-        area.append(this._pager);
+        // Assistant view inside content stack
+        this._assistantView = new AssistantView(this._daemon);
+        this._assistantView.connect('close-requested', () => {
+            this.toggleAssistant(false);
+        });
+
+        this._contentStack = new Gtk.Stack({
+            transition_type: Gtk.StackTransitionType.CROSSFADE,
+            transition_duration: 180,
+            hexpand: true,
+            vexpand: true,
+        });
+
+        this._contentStack.add_named(this._pager, 'pager');
+        this._contentStack.add_named(this._assistantView, 'assistant');
+        this._contentStack.set_visible_child_name('pager');
+
+        area.append(this._contentStack);
+
+        this.connect('voice-requested', () => {
+            this.toggleAssistant();
+        });
+
         return area;
+    }
+
+    toggleAssistant(open = null) {
+        const isAssistant = this._contentStack.get_visible_child_name() === 'assistant';
+        const target = open !== null ? open : !isAssistant;
+        if (target) {
+            this._contentStack.set_visible_child_name('assistant');
+            this._assistantActive = true;
+            this.focusAssistantEntry();
+        } else {
+            this._contentStack.set_visible_child_name('pager');
+            this._assistantActive = false;
+        }
+    }
+
+    focusAssistantEntry() {
+        if (!this._assistantView || !this._assistantView._entry) return;
+        this._assistantView._entry.grab_focus();
+        GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            if (this._assistantActive && this._assistantView?._entry) {
+                this._assistantView._entry.grab_focus();
+            }
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    get assistantView() {
+        return this._assistantView;
+    }
+
+    get isAssistantOpen() {
+        return Boolean(this._assistantActive);
     }
 
     get page() {
@@ -373,6 +428,10 @@ export const ExpandedView = GObject.registerClass({
     }
 
     showPage(target, { animate = true } = {}) {
+        if (this._contentStack && this._contentStack.get_visible_child_name() === 'assistant') {
+            this.toggleAssistant(false);
+        }
+
         const index = typeof target === 'string'
             ? this._pages.findIndex(p => p.name === target)
             : target;

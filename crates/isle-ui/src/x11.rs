@@ -7,9 +7,11 @@ use gtk::prelude::*;
 use gtk4 as gtk;
 use x11rb::connection::Connection as _;
 use x11rb::protocol::xproto::{
-    ChangeWindowAttributesAux, ConfigureWindowAux, ConnectionExt as _, StackMode, Window,
+    ChangeWindowAttributesAux, ConfigureWindowAux, ConnectionExt as _, InputFocus, StackMode,
+    Window,
 };
 use x11rb::rust_connection::RustConnection;
+use x11rb::CURRENT_TIME;
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 
@@ -67,6 +69,39 @@ impl X11Context {
         let geom = ConfigureWindowAux::new().stack_mode(StackMode::ABOVE);
         self.conn.configure_window(xid, &geom)?.check()?;
         self.conn.flush()?;
+        Ok(())
+    }
+
+    /// Queries the currently focused X11 window.
+    pub fn get_input_focus(&self) -> Result<Window, Error> {
+        let reply = self.conn.get_input_focus()?.reply()?;
+        Ok(reply.focus)
+    }
+
+    /// Assigns X11 input focus to the specified window.
+    pub fn focus_window(&self, xid: Window) -> Result<(), Error> {
+        self.conn
+            .set_input_focus(InputFocus::PARENT, xid, CURRENT_TIME)?
+            .check()?;
+        self.conn.flush()?;
+        Ok(())
+    }
+
+    /// Restores X11 input focus to the given window, handling None/invalid windows safely.
+    pub fn restore_focus(&self, xid: Option<Window>) -> Result<(), Error> {
+        if let Some(target) = xid {
+            // Check if target is not None (0) or PointerRoot (1)
+            if target != 0 && target != 1 {
+                if let Ok(cookie) = self.conn.set_input_focus(InputFocus::PARENT, target, CURRENT_TIME) {
+                    let _ = cookie.check();
+                    let _ = self.conn.flush();
+                    return Ok(());
+                }
+            }
+        }
+        // Fallback to PointerRoot if previous window was invalid or destroyed
+        let _ = self.conn.set_input_focus(InputFocus::POINTER_ROOT, x11rb::NONE, CURRENT_TIME);
+        let _ = self.conn.flush();
         Ok(())
     }
 }

@@ -22,6 +22,7 @@ mod grok;
 mod mic;
 mod models;
 mod music;
+mod nim;
 mod opencode;
 mod sign_in;
 mod system;
@@ -170,6 +171,7 @@ pub struct Context {
     codex_model: String,
     grok_model: String,
     opencode_model: String,
+    nim_model: String,
     whisper_model: String,
     language: String,
     /// How long a quiet conversation is kept ("day", "idle-30m", "idle-2h"; see chat.rs).
@@ -571,6 +573,7 @@ impl Session {
             Provider::Codex => &context.codex_model,
             Provider::Grok => &context.grok_model,
             Provider::Opencode => &context.opencode_model,
+            Provider::Nim => &context.nim_model,
         };
         let catalog = self
             .catalogs
@@ -589,6 +592,7 @@ impl Session {
             // opencode's, the model the user's own opencode would use.
             Provider::Opencode => opencode::user_model().unwrap_or_default(),
             Provider::Agy => String::new(),
+            Provider::Nim => nim::DEFAULT_MODEL.to_owned(),
         };
         let usable = |model: &str| {
             let signature = catalog.map(models::Catalog::signature).unwrap_or_default();

@@ -62,6 +62,9 @@ struct Inner {
     last_pointer_pos: Cell<(f64, f64)>,
     manual_collapse_screen_pos: Cell<Option<(f64, f64)>>,
     collapse_timer: Cell<Option<glib::SourceId>>,
+
+    // X11 Keyboard Focus Management
+    previous_focus: Cell<Option<Window>>,
 }
 
 impl FloatingWindow {
@@ -118,6 +121,7 @@ impl FloatingWindow {
             last_pointer_pos: Cell::new((0.0, 0.0)),
             manual_collapse_screen_pos: Cell::new(None),
             collapse_timer: Cell::new(None),
+            previous_focus: Cell::new(None),
         });
 
         let floating = Self(inner);
@@ -335,7 +339,8 @@ impl FloatingWindow {
 
         floating.0.window.add_controller(motion);
 
-        // Click gesture to also toggle expansion on click
+        // Click gesture to expand when clicked in compact state.
+        // Background clicks while expanded do not collapse the panel.
         let click = gtk::GestureClick::new();
         let weak_click = Rc::downgrade(&floating.0);
         click.connect_released(move |_, _, x, y| {
@@ -346,19 +351,17 @@ impl FloatingWindow {
             let (sx, sy) = widget_to_screen(&inner.window, geom, x, y);
             let floating = FloatingWindow(inner.clone());
 
-            if is_exp {
-                info!(
-                    "[INTERACTION] Click received at screen ({sx:.1}, {sy:.1}) [widget ({x:.1}, {y:.1})] on expanded notch ({cur_w:.1}x{cur_h:.1}); manually collapsing"
-                );
-                // Set manual collapse anchor at current screen position to avoid instant re-expansion
-                inner.manual_collapse_screen_pos.set(Some((sx, sy)));
-                floating.set_expanded(false, "click-toggle");
-            } else {
+            if !is_exp {
                 info!(
                     "[INTERACTION] Click received at screen ({sx:.1}, {sy:.1}) [widget ({x:.1}, {y:.1})] on compact notch ({cur_w:.1}x{cur_h:.1}); expanding"
                 );
                 inner.manual_collapse_screen_pos.set(None);
-                floating.set_expanded(true, "click-toggle");
+                floating.set_expanded(true, "click-expand");
+            } else {
+                // When clicking inside the expanded notch, ensure X11 input focus is active
+                if let Some(xid) = inner.xid.get() {
+                    let _ = inner.x11.focus_window(xid);
+                }
             }
         });
         overlay.add_controller(click);
@@ -424,10 +427,23 @@ impl FloatingWindow {
             info!(
                 "[TRANSITION] EXPAND (reason: {reason}) | current_geom=({cur_w:.1}x{cur_h:.1}), target=({EXPANDED_WIDTH:.1}x{EXPANDED_HEIGHT:.1}), animating={is_animating}"
             );
+            // Save current X11 focus window before assigning focus to Isle
+            if let Some(xid) = self.0.xid.get() {
+                if let Ok(prev) = self.0.x11.get_input_focus() {
+                    // Do not store Isle itself as the previous focus window
+                    if prev != xid && prev != 0 && prev != 1 {
+                        self.0.previous_focus.set(Some(prev));
+                    }
+                }
+                let _ = self.0.x11.focus_window(xid);
+            }
         } else {
             info!(
                 "[TRANSITION] COLLAPSE (reason: {reason}) | current_geom=({cur_w:.1}x{cur_h:.1}), target=({COMPACT_WIDTH:.1}x{COMPACT_HEIGHT:.1}), animating={is_animating}"
             );
+            // Restore previous X11 focus window when collapsing
+            let prev = self.0.previous_focus.take();
+            let _ = self.0.x11.restore_focus(prev);
         }
 
         let (target_w, target_h, target_r, target_sh) = if expanded {

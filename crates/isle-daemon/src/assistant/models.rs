@@ -210,6 +210,13 @@ pub fn name(provider: Provider, model: &str) -> String {
         Provider::Claude => title_case(model),
         // "grok-4.6", never listed here: "Grok 4.6", as Grok names its models.
         Provider::Grok => title_case(&model.replace('-', " ")),
+        Provider::Nim => {
+            if model == super::nim::DEFAULT_MODEL {
+                "Nemotron 3.5 Super VL 120B".to_string()
+            } else {
+                model.to_owned()
+            }
+        }
         _ => model.to_owned(),
     })
 }
@@ -265,6 +272,7 @@ pub fn fallback(provider: Provider, catalog: Option<&Catalog>) -> String {
     {
         Some(default) => default.to_owned(),
         None if provider == Provider::Claude => "opus".into(),
+        None if provider == Provider::Nim => super::nim::DEFAULT_MODEL.into(),
         None => String::new(),
     }
 }
@@ -315,8 +323,8 @@ fn due(
     now: i64,
 ) -> bool {
     let waited = |least: Duration| since.is_none_or(|since| since >= least);
-    if provider == Provider::Claude {
-        // A file of Claude Code's own: nothing to start, so whenever asked.
+    if provider == Provider::Claude || provider == Provider::Nim {
+        // A file of Claude Code's own or NIM's in-memory catalog: nothing to start, so whenever asked.
         return true;
     }
     match why {
@@ -383,6 +391,7 @@ async fn read(provider: Provider) -> Found {
         return Found::Gone;
     };
     let read = match provider {
+        Provider::Nim => Ok(super::nim::catalog()),
         Provider::Claude => tokio::task::spawn_blocking(read_claude)
             .await
             .map_err(anyhow::Error::from),

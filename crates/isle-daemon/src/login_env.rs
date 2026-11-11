@@ -24,6 +24,8 @@ const KEPT: &[&str] = &[
     "CODEX_HOME",
     "OPENAI_API_KEY",
     "OPENAI_BASE_URL",
+    "NVIDIA_API_KEY",
+    "NIM_API_KEY",
     "GEMINI_API_KEY",
     "GOOGLE_API_KEY",
     "GOOGLE_CLOUD_PROJECT",
@@ -41,7 +43,7 @@ const KEPT: &[&str] = &[
     "N_PREFIX",
     "NPM_CONFIG_PREFIX",
 ];
-const KEPT_PREFIXES: &[&str] = &["ANTHROPIC_", "CLAUDE_CODE_", "AWS_", "VERTEX_"];
+const KEPT_PREFIXES: &[&str] = &["ANTHROPIC_", "CLAUDE_CODE_", "AWS_", "VERTEX_", "NVIDIA_", "NIM_"];
 const PROXIES: &[&str] = &["http_proxy", "https_proxy", "no_proxy", "all_proxy"];
 
 /// Takes over what the login shell sets. Call it before any other thread runs.

@@ -13,11 +13,13 @@ use super::answer::Answer;
 use super::claude::Claude;
 use super::codex::Codex;
 use super::grok::Grok;
+use super::nim::Nim;
 use super::opencode::Opencode;
 
 /// An AI CLI the assistant can run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Provider {
+    Nim,
     Agy,
     Claude,
     Codex,
@@ -27,7 +29,8 @@ pub enum Provider {
 
 /// Tried in this order when the user picked "auto", signed-in ones first. agy comes last: its terms bar
 /// third-party tools, so it answers only when it is all there is, or picked.
-const AUTO: [Provider; 5] = [
+const AUTO: [Provider; 6] = [
+    Provider::Nim,
     Provider::Claude,
     Provider::Codex,
     Provider::Grok,
@@ -39,6 +42,7 @@ impl Provider {
     /// Its id in Settings and in saved state.
     pub fn id(self) -> &'static str {
         match self {
+            Provider::Nim => "nim",
             Provider::Agy => "agy",
             Provider::Claude => "claude",
             Provider::Codex => "codex",
@@ -50,6 +54,7 @@ impl Provider {
     /// The name the island shows ("Sign in to Claude Code").
     pub fn name(self) -> &'static str {
         match self {
+            Provider::Nim => "NVIDIA NIM",
             Provider::Agy => "Antigravity",
             Provider::Claude => "Claude Code",
             Provider::Codex => "Codex",
@@ -61,6 +66,7 @@ impl Provider {
     /// The program's file name.
     fn command(self) -> &'static str {
         match self {
+            Provider::Nim => "isled",
             Provider::Agy => "agy",
             Provider::Claude => "claude",
             Provider::Codex => "codex",
@@ -72,6 +78,9 @@ impl Provider {
     /// The CLI on the PATH, else where an installer or Node version manager puts it: isled starts from
     /// systemd, whose PATH lacks what a shell's profile adds (~/.local/bin, nvm's current Node…).
     pub fn program(self) -> Option<PathBuf> {
+        if self == Provider::Nim {
+            return Some(std::env::current_exe().unwrap_or_else(|_| PathBuf::from("isled")));
+        }
         let name = self.command();
         let home = dirs::home_dir().unwrap_or_default();
         std::env::var_os("PATH")
@@ -86,6 +95,7 @@ impl Provider {
     pub fn signed_in(self) -> bool {
         let home = dirs::home_dir().unwrap_or_default();
         match self {
+            Provider::Nim => super::nim::signed_in(),
             Provider::Agy => agy::signed_in_at(&home),
             Provider::Claude => super::claude::signed_in(),
             Provider::Codex => {
@@ -100,6 +110,7 @@ impl Provider {
     /// How to sign in to it, in a terminal.
     pub fn sign_in_command(self) -> &'static str {
         match self {
+            Provider::Nim => "set NVIDIA_API_KEY or write ~/.config/isle/nim_api_key",
             Provider::Agy => "agy",
             Provider::Claude => "claude",
             Provider::Codex => "codex login",
@@ -108,7 +119,7 @@ impl Provider {
         }
     }
 
-    /// The provider with id `id` ("agy", "claude", "codex", "grok", "opencode").
+    /// The provider with id `id` ("nim", "agy", "claude", "codex", "grok", "opencode").
     pub fn from_id(id: &str) -> Option<Provider> {
         AUTO.into_iter().find(|p| p.id() == id)
     }
@@ -120,7 +131,7 @@ impl Provider {
     }
 
     /// Every provider, in "auto" order.
-    pub fn all() -> [Provider; 5] {
+    pub fn all() -> [Provider; 6] {
         AUTO
     }
 
@@ -225,6 +236,7 @@ fn npm_prefix(home: &Path, from_env: Option<PathBuf>) -> Option<PathBuf> {
 
 /// The running CLI behind the assistant, whichever it is.
 pub enum Brain {
+    Nim(Nim),
     Agy(Agy),
     Claude(Claude),
     Codex(Codex),
@@ -242,10 +254,14 @@ impl Brain {
         workspace: &Path,
         instructions: &str,
     ) -> anyhow::Result<Self> {
+        if provider == Provider::Nim {
+            return Ok(Brain::Nim(Nim::start(model, resume, workspace, instructions).await?));
+        }
         let program = provider.program().ok_or_else(|| {
             anyhow::anyhow!("could not start {}: no such file", provider.command())
         })?;
         Ok(match provider {
+            Provider::Nim => unreachable!(),
             Provider::Agy => Brain::Agy(Agy::start_program(&program, model, resume, workspace)?),
             Provider::Claude => Brain::Claude(Claude::start(
                 &program,
@@ -270,13 +286,14 @@ impl Brain {
     pub async fn warm(&mut self) -> anyhow::Result<()> {
         match self {
             Brain::Codex(codex) => codex.warm().await,
-            Brain::Agy(_) | Brain::Claude(_) | Brain::Grok(_) | Brain::Opencode(_) => Ok(()),
+            Brain::Nim(_) | Brain::Agy(_) | Brain::Claude(_) | Brain::Grok(_) | Brain::Opencode(_) => Ok(()),
         }
     }
 
     /// Which CLI this is.
     pub fn provider(&self) -> Provider {
         match self {
+            Brain::Nim(_) => Provider::Nim,
             Brain::Agy(_) => Provider::Agy,
             Brain::Claude(_) => Provider::Claude,
             Brain::Codex(_) => Provider::Codex,
@@ -294,6 +311,7 @@ impl Brain {
         draft: Option<&UnboundedSender<String>>,
     ) -> anyhow::Result<Answer> {
         match self {
+            Brain::Nim(nim) => nim.ask(prompt, activity, draft).await,
             Brain::Agy(agy) => agy.ask(prompt, activity).await,
             Brain::Claude(claude) => claude.ask(prompt, activity, draft).await,
             Brain::Codex(codex) => codex.ask(prompt, activity, draft).await,
@@ -305,6 +323,7 @@ impl Brain {
     /// The conversation's id, to resume it once the process had to go.
     pub fn conversation(&self) -> Option<String> {
         match self {
+            Brain::Nim(nim) => nim.conversation.clone(),
             Brain::Agy(agy) => agy.conversation.clone(),
             Brain::Claude(claude) => claude.conversation.clone(),
             Brain::Codex(codex) => codex.conversation.clone(),
@@ -316,6 +335,7 @@ impl Brain {
     /// Deletes the conversation `id` had with `provider` now: a chat that ended, or the eval's.
     pub fn forget(provider: Provider, id: &str) {
         match provider {
+            Provider::Nim => {}
             Provider::Agy => agy::forget(id),
             Provider::Claude => super::claude::forget(id),
             Provider::Codex => super::codex::forget(id),

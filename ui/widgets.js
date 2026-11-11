@@ -13,7 +13,7 @@ import GObject from 'gi://GObject';
 import Gtk from 'gi://Gtk?version=4.0';
 import Pango from 'gi://Pango';
 
-import { Bot } from 'file:///home/butarch/Desktop/isle-upstream/gnome-extension/src/bot.js';
+import { BotIcon } from './botIcon.js';
 import * as Theme from 'file:///home/butarch/Desktop/isle-upstream/gnome-extension/src/theme.js';
 
 const ICONS_DIR = '/home/butarch/Desktop/isle-upstream/gnome-extension/icons';
@@ -475,28 +475,7 @@ export const Bars = GObject.registerClass({
 });
 
 // ── Assistant Bot Avatar ──────────────────────────────────────────────
-
-export const BotIcon = GObject.registerClass({
-    GTypeName: 'IsleGtkBotIcon',
-}, class BotIcon extends Gtk.DrawingArea {
-    _init(size = 20, look = { shape: 'cloud', color: 'cloud', glow: 'match' }) {
-        super._init({
-            content_width: size,
-            content_height: size,
-            halign: Gtk.Align.CENTER,
-            valign: Gtk.Align.CENTER,
-        });
-        this._size = size;
-        this._bot = new Bot(look);
-        this._bot.holdEyes();
-
-        this.set_draw_func((area, cr, width, height) => {
-            this._bot.paint(cr, Math.min(width, height));
-        });
-    }
-
-    get bot() { return this._bot; }
-});
+export { BotIcon };
 
 // ── Privacy and Status Indicators ─────────────────────────────────────
 

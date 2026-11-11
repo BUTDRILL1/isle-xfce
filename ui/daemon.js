@@ -113,6 +113,25 @@ const INTERFACES = {
             <property name="Items" type="s" access="read"/>`),
         properties: { Items: 'reminders' },
     },
+    assistant: {
+        xml: node('Assistant1', `
+            <method name="Warm"><arg name="context" type="s" direction="in"/></method>
+            <method name="Listen"><arg name="context" type="s" direction="in"/></method>
+            <method name="Ask"><arg name="text" type="s" direction="in"/><arg name="context" type="s" direction="in"/></method>
+            <method name="Stop"/>
+            <method name="End"/>
+            <method name="Results"><arg name="step" type="t" direction="in"/><arg name="results" type="s" direction="in"/></method>
+            <method name="Cancel"/>
+            <method name="NewChat"/>
+            <method name="UndoNewChat"/>
+            <method name="ClearChat"/>
+            <signal name="Level"><arg name="level" type="d"/></signal>
+            <signal name="Notice"><arg name="text" type="s"/><arg name="ok" type="b"/></signal>
+            <signal name="ModelSwitched"><arg name="provider" type="s"/><arg name="plan" type="s"/><arg name="picked" type="s"/><arg name="used" type="s"/></signal>
+            <property name="State" type="s" access="read"/>
+            <property name="History" type="s" access="read"/>`),
+        properties: { State: 'assistant', History: 'chat' },
+    },
 };
 
 const PLAIN = new Set(['updates']);
