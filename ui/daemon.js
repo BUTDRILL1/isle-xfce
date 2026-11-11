@@ -270,6 +270,15 @@ export class Daemon extends EventEmitter {
         case 'Alert':
             this.emit('usage-alert', ...args);
             break;
+        case 'Level':
+            this.emit('assistant-level', ...args);
+            break;
+        case 'Notice':
+            this.emit('assistant-notice', ...args);
+            break;
+        case 'ModelSwitched':
+            this.emit('assistant-model-switched', ...args);
+            break;
         case 'Event':
             try {
                 this.emit(name === 'agents' ? 'agent-event' : 'system-event', JSON.parse(args[0]));

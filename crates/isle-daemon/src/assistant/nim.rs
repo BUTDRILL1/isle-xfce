@@ -14,7 +14,7 @@ use anyhow::bail;
 use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedSender;
 
-use super::answer::{Answer, SCHEMA, from_text};
+use super::answer::{Answer, SCHEMA, from_text, partial_say};
 use super::models::{Catalog, Model};
 
 pub const DEFAULT_MODEL: &str = "nvidia/nemotron-3.5-super-vl-120b-a12b";
@@ -250,6 +250,7 @@ pub struct Nim {
     _instructions: String,
     pub conversation: Option<String>,
     history: Vec<Value>,
+    pending_tool_ids: Vec<String>,
 }
 
 impl Nim {
@@ -293,7 +294,65 @@ impl Nim {
             _instructions: instructions.to_owned(),
             conversation: Some(conversation_id),
             history,
+            pending_tool_ids: Vec::new(),
         })
+    }
+
+    /// Records the user prompt or tool results into history before sending to the model.
+    /// If there are pending tool calls awaiting results, formats them as `role: "tool"` messages.
+    fn record_prompt(&mut self, prompt: &str) {
+        if !self.pending_tool_ids.is_empty() {
+            let tool_ids = std::mem::take(&mut self.pending_tool_ids);
+            for id in tool_ids {
+                self.history.push(json!({
+                    "role": "tool",
+                    "tool_call_id": id,
+                    "content": prompt,
+                }));
+            }
+        } else {
+            self.history.push(json!({
+                "role": "user",
+                "content": prompt,
+            }));
+        }
+    }
+
+    /// Records assistant tool calls in history and tracks pending tool call IDs for the next turn.
+    fn record_tool_calls(&mut self, accumulated_content: &str, tool_calls: &[ToolCallChunk]) {
+        let mut pending_ids = Vec::with_capacity(tool_calls.len());
+        let tool_calls_json: Vec<Value> = tool_calls
+            .iter()
+            .enumerate()
+            .map(|(i, c)| {
+                let id = if c.id.is_empty() {
+                    format!("call_{}_{}", crate::clock::now_ms(), i)
+                } else {
+                    c.id.clone()
+                };
+                pending_ids.push(id.clone());
+                json!({
+                    "id": id,
+                    "type": "function",
+                    "function": {
+                        "name": c.name,
+                        "arguments": c.arguments,
+                    }
+                })
+            })
+            .collect();
+
+        self.pending_tool_ids = pending_ids;
+
+        self.history.push(json!({
+            "role": "assistant",
+            "content": if accumulated_content.is_empty() {
+                Value::Null
+            } else {
+                Value::String(accumulated_content.to_owned())
+            },
+            "tool_calls": tool_calls_json,
+        }));
     }
 
     /// One turn of conversation with NVIDIA NIM: sends prompt, streams SSE chunks, parses tool calls.
@@ -303,10 +362,7 @@ impl Nim {
         activity: Option<&UnboundedSender<String>>,
         draft: Option<&UnboundedSender<String>>,
     ) -> anyhow::Result<Answer> {
-        self.history.push(json!({
-            "role": "user",
-            "content": prompt,
-        }));
+        self.record_prompt(prompt);
 
         let payload = json!({
             "model": self.model,
@@ -384,7 +440,13 @@ impl Nim {
                                         if !text.is_empty() {
                                             accumulated.push_str(text);
                                             if let Some(ref tx) = draft_tx {
-                                                tx.send(accumulated.clone()).ok();
+                                                if let Some(say) = partial_say(&accumulated) {
+                                                    tx.send(say).ok();
+                                                } else if !accumulated.trim_start().starts_with('{')
+                                                    && !accumulated.trim_start().starts_with("```")
+                                                {
+                                                    tx.send(accumulated.clone()).ok();
+                                                }
                                             }
                                         }
                                     }
@@ -463,27 +525,7 @@ impl Nim {
                 actions.push(action);
             }
 
-            // Record assistant tool calls in history
-            let tool_calls_json: Vec<Value> = tool_calls
-                .iter()
-                .enumerate()
-                .map(|(i, c)| {
-                    json!({
-                        "id": if c.id.is_empty() { format!("call_{}_{}", crate::clock::now_ms(), i) } else { c.id.clone() },
-                        "type": "function",
-                        "function": {
-                            "name": c.name,
-                            "arguments": c.arguments,
-                        }
-                    })
-                })
-                .collect();
-
-            self.history.push(json!({
-                "role": "assistant",
-                "content": if accumulated_content.is_empty() { Value::Null } else { Value::String(accumulated_content.clone()) },
-                "tool_calls": tool_calls_json,
-            }));
+            self.record_tool_calls(&accumulated_content, &tool_calls);
 
             Ok(Answer {
                 say: accumulated_content,
@@ -641,5 +683,177 @@ mod tests {
 
         let parsed: Value = serde_json::from_str(&calls[0].arguments).unwrap();
         assert_eq!(parsed["command"], "wpctl status");
+    }
+
+    #[test]
+    fn partial_say_extraction_on_streaming_json_chunks() {
+        let mut accumulated = String::new();
+        let mut emitted_drafts = Vec::new();
+
+        // Simulate incoming SSE chunks of JSON schema output
+        let chunks = [
+            "{\"",
+            "say",
+            "\": \"",
+            "Hello",
+            " world",
+            "\", ",
+            "\"actions\": []",
+            "}",
+        ];
+
+        for chunk in chunks {
+            accumulated.push_str(chunk);
+            if let Some(say) = partial_say(&accumulated) {
+                emitted_drafts.push(say);
+            } else if !accumulated.trim_start().starts_with('{')
+                && !accumulated.trim_start().starts_with("```")
+            {
+                emitted_drafts.push(accumulated.clone());
+            }
+        }
+
+        // Initially when JSON braces/keys are incomplete and "say" has not started, nothing is emitted.
+        // Once "say" value begins, only the speech content is emitted (no raw JSON syntax).
+        assert_eq!(
+            emitted_drafts,
+            vec!["", "Hello", "Hello world", "Hello world", "Hello world", "Hello world"]
+        );
+
+        // Plain text fallback (when model outputs text without JSON schema)
+        let mut plain_acc = String::new();
+        let mut plain_drafts = Vec::new();
+        for chunk in ["Hello", " user", "!"] {
+            plain_acc.push_str(chunk);
+            if let Some(say) = partial_say(&plain_acc) {
+                plain_drafts.push(say);
+            } else if !plain_acc.trim_start().starts_with('{')
+                && !plain_acc.trim_start().starts_with("```")
+            {
+                plain_drafts.push(plain_acc.clone());
+            }
+        }
+        assert_eq!(plain_drafts, vec!["Hello", "Hello user", "Hello user!"]);
+
+        // When raw JSON starts but doesn't have "say" yet, raw braces are never sent
+        let mut json_no_say = String::new();
+        let mut no_say_drafts = Vec::new();
+        for chunk in ["{", "\"actions\": ["] {
+            json_no_say.push_str(chunk);
+            if let Some(say) = partial_say(&json_no_say) {
+                no_say_drafts.push(say);
+            } else if !json_no_say.trim_start().starts_with('{')
+                && !json_no_say.trim_start().starts_with("```")
+            {
+                no_say_drafts.push(json_no_say.clone());
+            }
+        }
+        assert!(no_say_drafts.is_empty());
+    }
+
+    #[test]
+    fn multi_turn_pending_tool_ids_formatting() {
+        let mut nim = Nim {
+            api_key: "dummy_key".to_string(),
+            model: DEFAULT_MODEL.to_string(),
+            _workspace: PathBuf::from("/tmp"),
+            _instructions: "You are Isle assistant.".to_string(),
+            conversation: Some("test-session".to_string()),
+            history: vec![json!({
+                "role": "system",
+                "content": "You are Isle assistant."
+            })],
+            pending_tool_ids: Vec::new(),
+        };
+
+        // Turn 1: User asks to check system status
+        nim.record_prompt("Check my wifi status");
+        assert_eq!(nim.history.len(), 2);
+        assert_eq!(nim.history[1]["role"], "user");
+        assert_eq!(nim.history[1]["content"], "Check my wifi status");
+
+        // Model emits tool call in response
+        let tool_call = ToolCallChunk {
+            id: "call_check_wifi_1".to_string(),
+            name: "check".to_string(),
+            arguments: "{\"command\":\"nmcli radio wifi\"}".to_string(),
+        };
+        nim.record_tool_calls("Checking wifi state", &[tool_call]);
+
+        assert_eq!(nim.history.len(), 3);
+        assert_eq!(nim.history[2]["role"], "assistant");
+        assert_eq!(nim.history[2]["content"], "Checking wifi state");
+        assert_eq!(nim.history[2]["tool_calls"][0]["id"], "call_check_wifi_1");
+        assert_eq!(nim.pending_tool_ids, vec!["call_check_wifi_1"]);
+
+        // Turn 2: Tool result comes in from agent loop ("Results from this computer...")
+        let tool_result = "Results from this computer:\nenabled";
+        nim.record_prompt(tool_result);
+
+        // pending_tool_ids must be drained
+        assert!(nim.pending_tool_ids.is_empty());
+
+        // History must contain a role: "tool" message with matching tool_call_id
+        assert_eq!(nim.history.len(), 4);
+        let tool_msg = &nim.history[3];
+        assert_eq!(tool_msg["role"], "tool");
+        assert_eq!(tool_msg["tool_call_id"], "call_check_wifi_1");
+        assert_eq!(tool_msg["content"], tool_result);
+
+        // Turn 2 response: Model returns final answer (text schema)
+        nim.history.push(json!({
+            "role": "assistant",
+            "content": "{\"say\": \"Your wifi is enabled.\", \"actions\": []}"
+        }));
+
+        // Turn 3: User enters next prompt - should be role: "user" because pending_tool_ids was empty
+        nim.record_prompt("Thanks, turn it off.");
+        assert_eq!(nim.history.len(), 6);
+        assert_eq!(nim.history[5]["role"], "user");
+        assert_eq!(nim.history[5]["content"], "Thanks, turn it off.");
+    }
+
+    #[test]
+    fn multi_tool_calls_format_multiple_tool_messages() {
+        let mut nim = Nim {
+            api_key: "dummy_key".to_string(),
+            model: DEFAULT_MODEL.to_string(),
+            _workspace: PathBuf::from("/tmp"),
+            _instructions: "You are Isle assistant.".to_string(),
+            conversation: Some("test-session".to_string()),
+            history: vec![json!({
+                "role": "system",
+                "content": "You are Isle assistant."
+            })],
+            pending_tool_ids: Vec::new(),
+        };
+
+        let tools = vec![
+            ToolCallChunk {
+                id: "call_a".to_string(),
+                name: "check".to_string(),
+                arguments: "{\"command\":\"echo a\"}".to_string(),
+            },
+            ToolCallChunk {
+                id: "call_b".to_string(),
+                name: "check".to_string(),
+                arguments: "{\"command\":\"echo b\"}".to_string(),
+            },
+        ];
+
+        nim.record_tool_calls("Running checks", &tools);
+        assert_eq!(nim.pending_tool_ids, vec!["call_a", "call_b"]);
+
+        nim.record_prompt("Results for both tools");
+        assert!(nim.pending_tool_ids.is_empty());
+
+        assert_eq!(nim.history.len(), 4);
+        assert_eq!(nim.history[2]["role"], "tool");
+        assert_eq!(nim.history[2]["tool_call_id"], "call_a");
+        assert_eq!(nim.history[2]["content"], "Results for both tools");
+
+        assert_eq!(nim.history[3]["role"], "tool");
+        assert_eq!(nim.history[3]["tool_call_id"], "call_b");
+        assert_eq!(nim.history[3]["content"], "Results for both tools");
     }
 }

@@ -17,6 +17,7 @@ import { Bot, paletteFor } from './bot.js';
 import { BotIcon } from './botIcon.js';
 import { ChatView, CommandCard, label } from './chat.js';
 import { icon, iconButton } from './widgets.js';
+import { executeActions, stopUnit } from './actions.js';
 
 const FACE_SIZE = 36;
 const POINTER_REST_S = 2.5;
@@ -109,6 +110,8 @@ export const AssistantView = GObject.registerClass({
 
         this._daemon = daemon;
         this._history = [];
+        this._lastStep = 0;
+        this._pendingDecision = null;
 
         // 1. Header Row (Fixed height): Character Face, Title / Status, New Chat, Close
         const headerRow = new Gtk.Box({
@@ -253,6 +256,12 @@ export const AssistantView = GObject.registerClass({
                     this._syncState();
                 }
             });
+            this._daemon.connect('running-changed', () => {
+                if (!this._daemon.running && this._pendingDecision) {
+                    this._pendingDecision.resolve('unanswered');
+                    this._pendingDecision = null;
+                }
+            });
             this._syncHistory();
             this._syncState();
         }
@@ -273,44 +282,48 @@ export const AssistantView = GObject.registerClass({
         // 2. Character expression -> thinking
         this._face.setForm('thinking');
         this._statusLabel.set_text('Thinking…');
+        this._statusLabel.set_visible(true);
         this._ideasBox.set_visible(false);
         this._chatView.setItems(this._history);
 
         this.emit('submitted', text);
 
         // 3. Process prompt: if connected to isled D-Bus daemon, delegate to daemon Ask
-        if (this._daemon && this._daemon._proxies['assistant']) {
+        const daemonConnected = Boolean(this._daemon && this._daemon._proxies['assistant'] && this._daemon.running);
+        if (daemonConnected) {
             const context = JSON.stringify({
                 provider: 'nim',
                 nim_model: 'nvidia/nemotron-3.5-super-vl-120b-a12b',
             });
             this._daemon.call('assistant', 'Ask', text, context).catch(err => {
                 console.warn(`Isle: Assistant Ask D-Bus call failed: ${err.message}`);
+                this._face.setForm('confused');
+                this._statusLabel.set_text(err.message || 'Error contacting daemon');
+                this._statusLabel.set_visible(true);
             });
-        }
+        } else {
+            // Standalone fallback mode (simulated approval card or reply)
+            if (text.toLowerCase().includes('install') || text.toLowerCase().includes('remove') || text.toLowerCase().includes('root') || text.toLowerCase().includes('script')) {
+                this._presentCommandApprovalCard(text);
+            } else {
+                GLib.timeout_add(GLib.PRIORITY_DEFAULT, 600, () => {
+                    this._face.setForm('reply');
+                    this._face.gesture('nod');
 
-        // 4. Process prompt: if command triggers simulated approval card (for standalone testing)
-        if (text.toLowerCase().includes('install') || text.toLowerCase().includes('remove') || text.toLowerCase().includes('root') || text.toLowerCase().includes('script')) {
-            this._presentCommandApprovalCard(text);
-        } else if (!this._daemon || !this._daemon._proxies['assistant']) {
-            // Generate contextual response when running in standalone mode
-            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 600, () => {
-                this._face.setForm('reply');
-                this._face.gesture('nod');
+                    let replyText = `I understand you asked: **${text}**.\n\n` +
+                        `• NVIDIA NIM provider active (\`nvidia/nemotron-3.5-super-vl-120b-a12b\`)\n` +
+                        `• D-Bus daemon \`isled\` provider architecture integrated\n` +
+                        `• Security controls active (caller verification + command card authorization)`;
 
-                let replyText = `I understand you asked: **${text}**.\n\n` +
-                    `• NVIDIA NIM provider active (\`nvidia/nemotron-3.5-super-vl-120b-a12b\`)\n` +
-                    `• D-Bus daemon \`isled\` provider architecture integrated\n` +
-                    `• Security controls active (caller verification + command card authorization)`;
-
-                this._history.push({
-                    role: 'assistant',
-                    text: replyText,
-                    at: GLib.get_real_time() / 1000,
+                    this._history.push({
+                        role: 'assistant',
+                        text: replyText,
+                        at: GLib.get_real_time() / 1000,
+                    });
+                    this._chatView.setItems(this._history);
+                    return GLib.SOURCE_REMOVE;
                 });
-                this._chatView.setItems(this._history);
-                return GLib.SOURCE_REMOVE;
-            });
+            }
         }
     }
 
@@ -350,7 +363,48 @@ export const AssistantView = GObject.registerClass({
         this._commandCard.set_visible(true);
     }
 
+    _waitForCardDecision(action) {
+        if (action && typeof action === 'object') {
+            this._activeCard = action;
+            this._commandCard.setCard(action);
+            this._commandCard.set_visible(true);
+        }
+        this._face.setForm('asking');
+        return new Promise(resolve => {
+            if (this._pendingDecision) {
+                this._pendingDecision.resolve('unanswered');
+            }
+            let timerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 60000, () => {
+                timerId = 0;
+                if (this._pendingDecision && this._pendingDecision.resolve === resolveWrapper) {
+                    this._pendingDecision = null;
+                    resolveWrapper('unanswered');
+                }
+                return GLib.SOURCE_REMOVE;
+            });
+            const resolveWrapper = val => {
+                if (timerId) {
+                    GLib.source_remove(timerId);
+                    timerId = 0;
+                }
+                resolve(val);
+            };
+            this._pendingDecision = {
+                resolve: resolveWrapper,
+                action,
+            };
+        });
+    }
+
     _onCardDecided(run) {
+        if (this._pendingDecision) {
+            const pending = this._pendingDecision;
+            this._pendingDecision = null;
+            this._face.setForm(run ? 'running' : 'confused');
+            pending.resolve(run);
+            return;
+        }
+
         if (!this._activeCard) return;
 
         if (run) {
@@ -407,6 +461,19 @@ export const AssistantView = GObject.registerClass({
     }
 
     _onCardStop() {
+        const stopCmd = this._daemon?.state?.assistant?.card?.stop;
+        if (Array.isArray(stopCmd) && stopCmd.length > 0) {
+            stopUnit(stopCmd).catch(err => {
+                console.warn(`Isle: stopUnit failed: ${err.message}`);
+            });
+            if (this._activeCard) {
+                this._activeCard.status = 'stopped';
+                this._commandCard.setCard(this._activeCard);
+            }
+            this._face.setForm('confused');
+            return;
+        }
+
         if (!this._activeCard) return;
         this._activeCard.status = 'stopped';
         this._commandCard.setCard(this._activeCard);
@@ -420,10 +487,15 @@ export const AssistantView = GObject.registerClass({
         this._ideasBox.set_visible(true);
         this._face.setForm('listening');
         this._statusLabel.set_text('Ready');
+        this._lastStep = 0;
+        if (this._pendingDecision) {
+            this._pendingDecision.resolve('unanswered');
+            this._pendingDecision = null;
+        }
         this.focusEntry();
-        if (this._daemon) {
+        if (this._daemon?.running) {
             try {
-                this._daemon.call('assistant', 'ClearChat');
+                this._daemon.call('assistant', 'NewChat');
             } catch (_) {}
         }
     }
@@ -442,15 +514,49 @@ export const AssistantView = GObject.registerClass({
         const state = this._daemon?.state?.assistant;
         if (!state) return;
 
-        if (state.phase) {
+        if (state.phase === 'error') {
+            this._face.setForm('confused');
+            const errorText = state.error || 'Error';
+            this._statusLabel.set_text(errorText);
+            this._statusLabel.set_visible(true);
+
+            if (state.error) {
+                const fullError = state.error + (state.hint ? `\n\n${state.hint}` : '');
+                const lastMsg = this._history[this._history.length - 1];
+                if (!lastMsg || lastMsg.role !== 'assistant' || lastMsg.text !== fullError) {
+                    this._history.push({
+                        role: 'assistant',
+                        text: fullError,
+                        at: GLib.get_real_time() / 1000,
+                    });
+                    this._chatView.setItems(this._history);
+                    this._chatView.set_visible(true);
+                    this._ideasBox.set_visible(false);
+                }
+            }
+        } else if (state.phase) {
             this._face.setForm(state.phase);
         }
 
         if (state.activity) {
             this._statusLabel.set_text(state.activity);
             this._statusLabel.set_visible(true);
-        } else {
-            this._statusLabel.set_visible(false);
+        } else if (state.phase !== 'error') {
+            if (state.phase === 'thinking') {
+                this._statusLabel.set_text('Thinking…');
+                this._statusLabel.set_visible(true);
+            } else if (state.phase === 'acting') {
+                this._statusLabel.set_text('Working…');
+                this._statusLabel.set_visible(true);
+            } else if (state.phase === 'listening') {
+                this._statusLabel.set_text('Listening…');
+                this._statusLabel.set_visible(true);
+            } else if (state.phase === 'reply') {
+                this._statusLabel.set_text('Ready');
+                this._statusLabel.set_visible(true);
+            } else {
+                this._statusLabel.set_visible(false);
+            }
         }
 
         if (state.draft) {
@@ -483,10 +589,29 @@ export const AssistantView = GObject.registerClass({
             this._ideasBox.set_visible(false);
         }
 
-        if (state.card) {
+        if (state.card && typeof state.card === 'object' && state.card.command) {
             this._activeCard = state.card;
             this._commandCard.setCard(state.card);
             this._commandCard.set_visible(true);
+        } else if ((!state.card || !state.card.command) && !this._pendingDecision) {
+            if (state.phase === 'listening' || state.phase === 'thinking') {
+                this._commandCard.set_visible(false);
+            }
+        }
+
+        if (state.phase === 'acting' && state.step !== this._lastStep) {
+            this._lastStep = state.step;
+            const step = state.step;
+            executeActions(state.actions ?? [], {
+                daemon: this._daemon,
+                decide: action => this._waitForCardDecision(action),
+            }).then(results => {
+                if (this._daemon?.running) {
+                    this._daemon.call('assistant', 'Results', step, JSON.stringify(results));
+                }
+            }).catch(err => {
+                console.warn(`Isle: executeActions error for step ${step}: ${err.message}`);
+            });
         }
     }
 
