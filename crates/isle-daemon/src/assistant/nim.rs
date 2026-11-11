@@ -279,7 +279,7 @@ impl Nim {
             .unwrap_or_else(|| format!("nim-{}", crate::clock::now_ms()));
 
         let system_prompt = format!(
-            "{instructions}\n\nAnswer every request with a JSON object conforming to this schema:\n{SCHEMA}"
+            "{instructions}\n\nAnswer every request with a JSON object conforming to this schema:\n{SCHEMA}\nWrite the JSON keys in this order: done, actions, say, listen."
         );
 
         let history = vec![json!({
@@ -439,13 +439,26 @@ impl Nim {
                                     if let Some(text) = delta.get("content").and_then(Value::as_str) {
                                         if !text.is_empty() {
                                             accumulated.push_str(text);
-                                            if let Some(ref tx) = draft_tx {
-                                                if let Some(say) = partial_say(&accumulated) {
-                                                    tx.send(say).ok();
-                                                } else if !accumulated.trim_start().starts_with('{')
-                                                    && !accumulated.trim_start().starts_with("```")
+                                            let say_opt = partial_say(&accumulated);
+                                            if let Some(ref say) = say_opt {
+                                                if let Some(ref tx) = draft_tx {
+                                                    tx.send(say.clone()).ok();
+                                                }
+                                                // If stream indicates a final conversational reply, stream speech
+                                                if (accumulated.contains("\"done\": true") || accumulated.contains("\"done\":true"))
+                                                    && (accumulated.contains("\"actions\": []") || accumulated.contains("\"actions\":[]"))
+                                                    && tool_chunks.is_empty()
                                                 {
+                                                    super::speak::stream(say);
+                                                }
+                                            } else if !accumulated.trim_start().starts_with('{')
+                                                && !accumulated.trim_start().starts_with("```")
+                                            {
+                                                if let Some(ref tx) = draft_tx {
                                                     tx.send(accumulated.clone()).ok();
+                                                }
+                                                if tool_chunks.is_empty() {
+                                                    super::speak::stream(&accumulated);
                                                 }
                                             }
                                         }
@@ -453,6 +466,7 @@ impl Nim {
 
                                     // Handle streaming tool calls
                                     if let Some(tools_arr) = delta.get("tool_calls").and_then(Value::as_array) {
+                                        super::speak::stop();
                                         for tool_val in tools_arr {
                                             let index = tool_val.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
                                             let entry = tool_chunks.entry(index).or_default();

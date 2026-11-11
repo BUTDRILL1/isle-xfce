@@ -146,12 +146,33 @@ export const AssistantView = GObject.registerClass({
 
         headerRow.append(statusBox);
 
-        // Action Buttons: + New Chat, × Close
+        // Action Buttons: Mute toggle, + New Chat, × Close
         const headerActions = new Gtk.Box({
             orientation: Gtk.Orientation.HORIZONTAL,
             spacing: 4,
             valign: Gtk.Align.CENTER,
         });
+
+        const muteFlagFile = Gio.File.new_for_path(
+            GLib.build_filenamev([GLib.get_user_runtime_dir(), 'isle-speech-muted'])
+        );
+        this._isMuted = muteFlagFile.query_exists(null);
+
+        const updateMuteIcon = () => {
+            const iconName = this._isMuted ? 'isle-speaker-off-symbolic' : 'isle-speaker-2-symbolic';
+            this._muteBtn.set_child(icon(iconName, 13));
+        };
+
+        this._muteBtn = iconButton(this._isMuted ? 'isle-speaker-off-symbolic' : 'isle-speaker-2-symbolic', 'isle-button-flat', () => {
+            this._isMuted = !this._isMuted;
+            if (this._isMuted) {
+                try { muteFlagFile.create(Gio.FileCreateFlags.NONE, null); } catch (_) {}
+            } else {
+                try { muteFlagFile.delete(null); } catch (_) {}
+            }
+            updateMuteIcon();
+        }, { size: 13, accessibleName: 'Toggle TTS voice output' });
+        headerActions.append(this._muteBtn);
 
         this._newChatBtn = iconButton('isle-plus-symbolic', 'isle-button-flat', () => {
             this.clearConversation();

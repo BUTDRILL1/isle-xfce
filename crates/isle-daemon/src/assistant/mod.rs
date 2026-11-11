@@ -28,6 +28,7 @@ mod sign_in;
 mod system;
 mod tasks;
 mod whisper;
+pub mod speak;
 
 use std::collections::{HashSet, VecDeque};
 use std::time::Duration;
@@ -1181,6 +1182,7 @@ pub async fn run(iface: InterfaceRef<AssistantService>, data: Sources, mut comma
                 None
             }
             Command::Listen(context) => {
+                speak::begin_turn();
                 keep = Keep::parse(&context.keep_chat);
                 if talk.end_if_over(&mut session, keep) {
                     show_history(&iface, &talk.chat).await;
@@ -1202,6 +1204,7 @@ pub async fn run(iface: InterfaceRef<AssistantService>, data: Sources, mut comma
                 interrupted
             }
             Command::Ask(text, context) => {
+                speak::begin_turn();
                 keep = Keep::parse(&context.keep_chat);
                 if talk.end_if_over(&mut session, keep) {
                     show_history(&iface, &talk.chat).await;
@@ -1224,6 +1227,7 @@ pub async fn run(iface: InterfaceRef<AssistantService>, data: Sources, mut comma
                 interrupted
             }
             Command::NewChat => {
+                speak::stop();
                 // The old one waits for Undo; the AI starts the new one afresh.
                 let old = std::mem::take(&mut talk.chat);
                 let mut kept = old.clone();
@@ -1302,6 +1306,7 @@ pub async fn run(iface: InterfaceRef<AssistantService>, data: Sources, mut comma
                 None
             }
             Command::ClearChat => {
+                speak::stop();
                 if let Some((old, _)) = talk.undo.take() {
                     Talk::delete(&old);
                 }
@@ -1310,6 +1315,7 @@ pub async fn run(iface: InterfaceRef<AssistantService>, data: Sources, mut comma
                 None
             }
             Command::End => {
+                speak::stop();
                 session.end();
                 // A day that ended while it was open.
                 new_day(&mut session, &mut pruned);
@@ -1326,7 +1332,11 @@ pub async fn run(iface: InterfaceRef<AssistantService>, data: Sources, mut comma
                 None
             }
             // Nothing being answered, so nothing to stop or report to.
-            Command::Stop | Command::Results(..) | Command::Cancel => None,
+            Command::Stop | Command::Cancel => {
+                speak::stop();
+                None
+            }
+            Command::Results(..) => None,
         };
         // Whatever came, the AI stays up a while longer from now.
         cool_at = session
@@ -1556,6 +1566,9 @@ async fn turn(
             music::check(&mut answer.actions).await;
             if session.drop_unrunnable(&mut answer.actions) {
                 answer.say = NEEDS_RELOGIN.into();
+            }
+            if !answer.say.trim().is_empty() {
+                speak::finish(&answer.say);
             }
             publish(iface, |state| {
                 state.phase = Phase::Reply;
@@ -1822,6 +1835,11 @@ async fn drive<T>(
                 let mut latest = card;
                 while let Ok(newer) = cards.try_recv() {
                     latest = newer;
+                }
+                if latest.get("status").and_then(Value::as_str) == Some("waiting") {
+                    if let Some(why) = latest.get("why").and_then(Value::as_str) {
+                        speak::offer(why);
+                    }
                 }
                 publish(iface, |state| state.card = latest).await;
             }
