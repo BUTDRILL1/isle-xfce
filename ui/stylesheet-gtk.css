@@ -368,19 +368,25 @@ button.isle-button, button.isle-pill, button.isle-tab, button.isle-corner-close 
 .isle-card-denied { color: rgba(255, 255, 255, 0.5); }
 
 /* The conversation, above the pill. */
-.isle-chat { padding: 10px 16px 0 16px; spacing: 8px; }
-.isle-chat-header { spacing: 6px; }
-.isle-chat-title { font-size: 12px; font-weight: 600; color: rgba(255, 255, 255, 0.46); }
+.isle-assistant-view { padding: 2px 18px 4px 18px; spacing: 8px; }
+.isle-assistant-header { spacing: 10px; padding: 2px 2px 6px 2px; }
+.isle-assistant-title { font-size: 13px; font-weight: 600; color: #ffffff; letter-spacing: -0.1px; }
+.isle-assistant-status { font-size: 11px; color: rgba(255, 255, 255, 0.48); }
+.isle-assistant-input-row { spacing: 8px; padding-top: 4px; padding-bottom: 2px; }
+
+.isle-chat { padding: 2px 0 2px 0; spacing: 8px; }
+.isle-chat-header { spacing: 6px; padding-bottom: 2px; }
+.isle-chat-title { font-size: 11px; font-weight: 600; color: rgba(255, 255, 255, 0.40); }
 .isle-chat-copied, .isle-card-copied { color: #30d158; }
-.isle-chat-new { padding: 5px; color: rgba(255, 255, 255, 0.75); background-color: rgba(255, 255, 255, 0.08); }
+.isle-chat-new { padding: 4px; color: rgba(255, 255, 255, 0.75); background-color: rgba(255, 255, 255, 0.08); border-radius: 999px; }
 .isle-chat-new:hover { color: #ffffff; background-color: rgba(255, 255, 255, 0.16); }
-.isle-chat-list { spacing: 10px; padding-top: 6px; padding-bottom: 4px; }
-.isle-chat-scroll { -st-vfade-offset: 28px; }
-.isle-chat-user { padding: 6px 12px; spacing: 5px; border-radius: 15px; background-color: rgba(255, 255, 255, 0.12); }
-.isle-chat-user-text { font-size: 13px; }
-.isle-chat-reply { font-size: 13px; color: rgba(255, 255, 255, 0.9); }
-.isle-chat-reply-row { spacing: 8px; }
-.isle-chat-time { font-size: 11px; font-weight: 600; color: rgba(255, 255, 255, 0.46); font-feature-settings: "tnum"; }
+.isle-chat-list { spacing: 12px; padding: 4px 2px; }
+.isle-chat-scroll { }
+.isle-chat-user { padding: 8px 14px; spacing: 5px; border-radius: 16px; background-color: rgba(255, 255, 255, 0.12); margin-left: 60px; }
+.isle-chat-user-text { font-size: 13px; color: #ffffff; }
+.isle-chat-reply { font-size: 13px; color: rgba(255, 255, 255, 0.92); }
+.isle-chat-reply-row { spacing: 10px; }
+.isle-chat-time { font-size: 11px; font-weight: 600; color: rgba(255, 255, 255, 0.40); font-feature-settings: "tnum"; }
 .isle-chat-command { spacing: 8px; }
 .isle-chat-command-text { font-family: monospace; font-size: 11px; padding: 5px 9px; border-radius: 8px; background-color: rgba(255, 255, 255, 0.06); }
 /* As wide whatever it says, so the command beside it keeps its width. */

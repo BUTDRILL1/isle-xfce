@@ -25,10 +25,18 @@ pub const COMPACT_HEIGHT: f64 = 38.0;
 pub const COMPACT_RADIUS: f64 = 18.0;
 pub const COMPACT_SHOULDER: f64 = 0.0;
 
-/// Expanded proportions for clean floating glass panel:
-/// - Expanded panel: width 600px, height 196px, rounded corners 24px, shoulder 0px.
-pub const EXPANDED_WIDTH: f64 = 600.0;
-pub const EXPANDED_HEIGHT: f64 = 196.0;
+/// Standard expanded proportions for media, timer, usage (600 × 300 px):
+pub const STANDARD_EXPANDED_WIDTH: f64 = 600.0;
+pub const STANDARD_EXPANDED_HEIGHT: f64 = 300.0;
+
+/// Dedicated expanded proportions for Assistant conversation (640 × 380 px):
+pub const ASSISTANT_EXPANDED_WIDTH: f64 = 640.0;
+pub const ASSISTANT_EXPANDED_HEIGHT: f64 = 380.0;
+
+#[allow(dead_code)]
+pub const EXPANDED_WIDTH: f64 = STANDARD_EXPANDED_WIDTH;
+#[allow(dead_code)]
+pub const EXPANDED_HEIGHT: f64 = STANDARD_EXPANDED_HEIGHT;
 pub const EXPANDED_RADIUS: f64 = 24.0;
 pub const EXPANDED_SHOULDER: f64 = 0.0;
 
@@ -401,6 +409,17 @@ impl FloatingWindow {
             }
         });
 
+        // 5. Connect css-classes notification to update geometry dynamically when switching modes
+        let weak_css = Rc::downgrade(&floating.0);
+        floating.0.window.connect_css_classes_notify(move |win| {
+            if let Some(inner) = weak_css.upgrade() {
+                let is_asst = win.has_css_class("isle-mode-assistant");
+                info!("[MODE] Window css-classes changed: isle-mode-assistant={is_asst}");
+                let floating = FloatingWindow(inner);
+                floating.update_target_geometry("css-classes-changed");
+            }
+        });
+
         Ok(floating)
     }
 
@@ -419,14 +438,9 @@ impl FloatingWindow {
             return;
         }
 
-        let (cur_w, cur_h, _, _) = self.current_geometry();
-        let is_animating = self.0.animating.get();
         self.0.is_expanded.set(expanded);
 
         if expanded {
-            info!(
-                "[TRANSITION] EXPAND (reason: {reason}) | current_geom=({cur_w:.1}x{cur_h:.1}), target=({EXPANDED_WIDTH:.1}x{EXPANDED_HEIGHT:.1}), animating={is_animating}"
-            );
             // Save current X11 focus window before assigning focus to Isle
             if let Some(xid) = self.0.xid.get() {
                 if let Ok(prev) = self.0.x11.get_input_focus() {
@@ -438,16 +452,37 @@ impl FloatingWindow {
                 let _ = self.0.x11.focus_window(xid);
             }
         } else {
-            info!(
-                "[TRANSITION] COLLAPSE (reason: {reason}) | current_geom=({cur_w:.1}x{cur_h:.1}), target=({COMPACT_WIDTH:.1}x{COMPACT_HEIGHT:.1}), animating={is_animating}"
-            );
             // Restore previous X11 focus window when collapsing
             let prev = self.0.previous_focus.take();
             let _ = self.0.x11.restore_focus(prev);
         }
 
-        let (target_w, target_h, target_r, target_sh) = if expanded {
-            (EXPANDED_WIDTH, EXPANDED_HEIGHT, EXPANDED_RADIUS, EXPANDED_SHOULDER)
+        self.update_target_geometry(reason);
+    }
+
+    /// Updates the spring targets dynamically based on current expansion state and active mode.
+    /// Preserves smooth continuous spring physics and prevents visual hitches or resets.
+    pub fn update_target_geometry(&self, reason: &str) {
+        let is_expanded = self.0.is_expanded.get();
+        let is_asst = self.0.window.has_css_class("isle-mode-assistant");
+        let (cur_w, cur_h, _, _) = self.current_geometry();
+
+        let (target_w, target_h, target_r, target_sh) = if is_expanded {
+            if is_asst {
+                (
+                    ASSISTANT_EXPANDED_WIDTH,
+                    ASSISTANT_EXPANDED_HEIGHT,
+                    EXPANDED_RADIUS,
+                    EXPANDED_SHOULDER,
+                )
+            } else {
+                (
+                    STANDARD_EXPANDED_WIDTH,
+                    STANDARD_EXPANDED_HEIGHT,
+                    EXPANDED_RADIUS,
+                    EXPANDED_SHOULDER,
+                )
+            }
         } else {
             (COMPACT_WIDTH, COMPACT_HEIGHT, COMPACT_RADIUS, COMPACT_SHOULDER)
         };
@@ -457,17 +492,24 @@ impl FloatingWindow {
         let mut r = self.0.radius_spring.get();
         let mut sh = self.0.shoulder_spring.get();
 
-        w.set_target(target_w);
-        h.set_target(target_h);
-        r.set_target(target_r);
-        sh.set_target(target_sh);
+        if (w.target - target_w).abs() > 0.1 || (h.target - target_h).abs() > 0.1 {
+            let is_animating = self.0.animating.get();
+            info!(
+                "[GEOMETRY] Retarget springs (reason: {reason}) | current=({cur_w:.1}x{cur_h:.1}), target=({target_w:.1}x{target_h:.1}), animating={is_animating}, expanded={is_expanded}, asst={is_asst}"
+            );
 
-        self.0.width_spring.set(w);
-        self.0.height_spring.set(h);
-        self.0.radius_spring.set(r);
-        self.0.shoulder_spring.set(sh);
+            w.set_target(target_w);
+            h.set_target(target_h);
+            r.set_target(target_r);
+            sh.set_target(target_sh);
 
-        self.start_animation();
+            self.0.width_spring.set(w);
+            self.0.height_spring.set(h);
+            self.0.radius_spring.set(r);
+            self.0.shoulder_spring.set(sh);
+
+            self.start_animation();
+        }
     }
 
     /// Starts stepping the 4 springs on Gtk tick callbacks.
@@ -494,6 +536,18 @@ impl FloatingWindow {
             let mut r = inner.radius_spring.get();
             let mut sh = inner.shoulder_spring.get();
 
+            // Verify and adapt spring targets if mode changed mid-animation
+            let is_expanded = inner.is_expanded.get();
+            if is_expanded {
+                let is_asst = inner.window.has_css_class("isle-mode-assistant");
+                let target_w = if is_asst { ASSISTANT_EXPANDED_WIDTH } else { STANDARD_EXPANDED_WIDTH };
+                let target_h = if is_asst { ASSISTANT_EXPANDED_HEIGHT } else { STANDARD_EXPANDED_HEIGHT };
+                if (w.target - target_w).abs() > 0.1 || (h.target - target_h).abs() > 0.1 {
+                    w.set_target(target_w);
+                    h.set_target(target_h);
+                }
+            }
+
             let s1 = w.step(dt);
             let s2 = h.step(dt);
             let s3 = r.step(dt);
@@ -511,7 +565,15 @@ impl FloatingWindow {
             if s1 && s2 && s3 && s4 {
                 inner.animating.set(false);
                 inner.last_tick.set(None);
-                let target_str = if inner.is_expanded.get() { "EXPANDED" } else { "COMPACT" };
+                let target_str = if inner.is_expanded.get() {
+                    if inner.window.has_css_class("isle-mode-assistant") {
+                        "ASSISTANT_EXPANDED (640x380)"
+                    } else {
+                        "STANDARD_EXPANDED (600x300)"
+                    }
+                } else {
+                    "COMPACT (240x38)"
+                };
                 info!(
                     "[ANIMATION] Spring settled at ({:.1}x{:.1}) | target={target_str}",
                     w.value, h.value

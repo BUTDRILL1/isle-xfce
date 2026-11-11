@@ -467,45 +467,25 @@ export const ChatView = GObject.registerClass({
         'new-chat': {},
         'close': {},
         'settled': {},
+        'copied': {},
     },
 }, class ChatView extends Gtk.Box {
     _init() {
         super._init({
             orientation: Gtk.Orientation.VERTICAL,
-            spacing: 8,
+            spacing: 4,
             css_classes: ['isle-chat'],
             hexpand: true,
             vexpand: true,
         });
 
-        // 1. Header: title, + New chat, Hide
-        const header = new Gtk.Box({
-            orientation: Gtk.Orientation.HORIZONTAL,
-            spacing: 6,
-            css_classes: ['isle-chat-header'],
-            valign: Gtk.Align.CENTER,
-        });
-        this._title = label('Conversation', 'isle-chat-title');
-        this._title.set_hexpand(true);
-        this._title.set_halign(Gtk.Align.START);
-        header.append(this._title);
-
-        header.append(iconButton('isle-plus-symbolic', 'isle-button-flat isle-chat-new', () => {
-            this.emit('new-chat');
-        }, { size: 13, accessibleName: 'New chat' }));
-
-        header.append(iconButton('isle-chevron-down-symbolic', 'isle-button-flat isle-chat-new', () => {
-            this.emit('close');
-        }, { size: 13, accessibleName: 'Hide the conversation' }));
-
-        this.append(header);
-
-        // 2. Scrollable message list
+        // Scrollable message list
         this._list = new Gtk.Box({
             orientation: Gtk.Orientation.VERTICAL,
-            spacing: 10,
+            spacing: 12,
             css_classes: ['isle-chat-list'],
             hexpand: true,
+            valign: Gtk.Align.FILL,
         });
 
         this._scroll = new Gtk.ScrolledWindow({
@@ -518,8 +498,35 @@ export const ChatView = GObject.registerClass({
         });
         this.append(this._scroll);
 
+        // Keep scrolled to bottom whenever contents change or layout reflows
+        const vadj = this._scroll.get_vadjustment();
+        if (vadj) {
+            vadj.connect('notify::upper', () => {
+                this._scrollToBottom();
+            });
+        }
+
         this._items = [];
         this._look = { shape: 'circle' };
+    }
+
+    _scrollToBottom() {
+        GLib.idle_add(GLib.PRIORITY_LOW, () => {
+            const adj = this._scroll?.get_vadjustment();
+            if (adj) {
+                const target = Math.max(0, adj.get_upper() - adj.get_page_size());
+                adj.set_value(target);
+            }
+            return GLib.SOURCE_REMOVE;
+        });
+        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 50, () => {
+            const adj = this._scroll?.get_vadjustment();
+            if (adj) {
+                const target = Math.max(0, adj.get_upper() - adj.get_page_size());
+                adj.set_value(target);
+            }
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     set look(look) {
@@ -546,12 +553,7 @@ export const ChatView = GObject.registerClass({
             last = item;
         });
 
-        // Scroll to bottom
-        GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
-            const adj = this._scroll.get_vadjustment();
-            if (adj) adj.set_value(adj.get_upper() - adj.get_page_size());
-            return GLib.SOURCE_REMOVE;
-        });
+        this._scrollToBottom();
     }
 
     get count() {
@@ -564,10 +566,15 @@ export const ChatView = GObject.registerClass({
                 orientation: Gtk.Orientation.HORIZONTAL,
                 css_classes: ['isle-chat-user'],
                 halign: Gtk.Align.END,
+                valign: Gtk.Align.START,
             });
             const text = label(item.text || '', 'isle-chat-user-text');
             text.set_wrap(true);
             text.set_wrap_mode(Pango.WrapMode.WORD_CHAR);
+            text.set_width_chars(1);
+            text.set_max_width_chars(48);
+            text.set_xalign(0.0);
+            text.set_selectable(true);
             bubble.append(text);
             return bubble;
         }
@@ -577,6 +584,8 @@ export const ChatView = GObject.registerClass({
                 orientation: Gtk.Orientation.HORIZONTAL,
                 spacing: 8,
                 css_classes: ['isle-chat-command'],
+                hexpand: true,
+                halign: Gtk.Align.FILL,
             });
             const spacer = new Gtk.Box({ width_request: FACE_SIZE });
             row.append(spacer);
@@ -606,12 +615,14 @@ export const ChatView = GObject.registerClass({
             return row;
         }
 
-        // Assistant reply row
+        // Assistant reply row: multiline message rendering with automatic text wrapping
         const row = new Gtk.Box({
             orientation: Gtk.Orientation.HORIZONTAL,
-            spacing: 8,
+            spacing: 10,
             css_classes: ['isle-chat-reply-row'],
-            halign: Gtk.Align.START,
+            hexpand: true,
+            halign: Gtk.Align.FILL,
+            valign: Gtk.Align.START,
         });
 
         if (withFace && this._look) {
@@ -627,21 +638,24 @@ export const ChatView = GObject.registerClass({
         text.set_use_markup(true);
         text.set_wrap(true);
         text.set_wrap_mode(Pango.WrapMode.WORD_CHAR);
-        text.set_markup(answerMarkup(item.text || ''));
+        text.set_width_chars(1);
+        text.set_max_width_chars(64);
+        try {
+            text.set_markup(answerMarkup(item.text || ''));
+        } catch (_) {
+            text.set_text(item.text || '');
+        }
         text.set_hexpand(true);
-        text.set_halign(Gtk.Align.START);
+        text.set_halign(Gtk.Align.FILL);
+        text.set_xalign(0.0);
+        text.set_yalign(0.0);
+        text.set_selectable(true);
         row.append(text);
 
         return row;
     }
 
     _copied() {
-        this._title.set_label('Copied');
-        this._title.add_css_class('isle-chat-copied');
-        GLib.timeout_add(GLib.PRIORITY_DEFAULT, COPIED_MS, () => {
-            this._title.set_label('Conversation');
-            this._title.remove_css_class('isle-chat-copied');
-            return GLib.SOURCE_REMOVE;
-        });
+        this.emit('copied');
     }
 });

@@ -20,11 +20,18 @@ import {
     label,
 } from './widgets.js';
 
-export const EXPANDED_WIDTH = 600;
-export const PAGE_HEIGHT = 150;
+export const STANDARD_EXPANDED_WIDTH = 600;
+export const STANDARD_EXPANDED_HEIGHT = 300;
+
+export const ASSISTANT_EXPANDED_WIDTH = 640;
+export const ASSISTANT_EXPANDED_HEIGHT = 380;
+
+export const EXPANDED_WIDTH = STANDARD_EXPANDED_WIDTH;
+export const EXPANDED_HEIGHT = STANDARD_EXPANDED_HEIGHT;
+export const PAGE_HEIGHT = 240;
 export const LARGE_WIDTH = 720;
-export const LARGE_PAGE_HEIGHT = 210;
-export const BOTTOM_PADDING = 20;
+export const LARGE_PAGE_HEIGHT = 340;
+export const BOTTOM_PADDING = 14;
 const HEADER_GAP = 16;
 const SLIDE_DURATION = 260;
 
@@ -68,7 +75,7 @@ export const ExpandedView = GObject.registerClass({
             valign: Gtk.Align.FILL,
             halign: Gtk.Align.FILL,
         });
-        this.set_size_request(EXPANDED_WIDTH, -1);
+        this.set_size_request(-1, -1);
 
         this._daemon = daemon || { state: {} };
         this._privacy = privacy || {};
@@ -336,9 +343,9 @@ export const ExpandedView = GObject.registerClass({
             orientation: Gtk.Orientation.VERTICAL,
             hexpand: true,
             vexpand: true,
+            valign: Gtk.Align.FILL,
             css_classes: ['isle-pager-area'],
         });
-        area.set_size_request(-1, PAGE_HEIGHT);
 
         this._pager = new Gtk.Stack({
             transition_type: Gtk.StackTransitionType.SLIDE_LEFT_RIGHT,
@@ -386,13 +393,20 @@ export const ExpandedView = GObject.registerClass({
     toggleAssistant(open = null) {
         const isAssistant = this._contentStack.get_visible_child_name() === 'assistant';
         const target = open !== null ? open : !isAssistant;
+        const win = this.get_root() || Gtk.Application.get_default()?.get_active_window();
         if (target) {
             this._contentStack.set_visible_child_name('assistant');
             this._assistantActive = true;
+            if (win && win.add_css_class) {
+                win.add_css_class('isle-mode-assistant');
+            }
             this.focusAssistantEntry();
         } else {
             this._contentStack.set_visible_child_name('pager');
             this._assistantActive = false;
+            if (win && win.remove_css_class) {
+                win.remove_css_class('isle-mode-assistant');
+            }
         }
     }
 
@@ -424,7 +438,11 @@ export const ExpandedView = GObject.registerClass({
     }
 
     get preferredWidth() {
-        return EXPANDED_WIDTH;
+        return this.isAssistantOpen ? ASSISTANT_EXPANDED_WIDTH : STANDARD_EXPANDED_WIDTH;
+    }
+
+    get preferredHeight() {
+        return this.isAssistantOpen ? ASSISTANT_EXPANDED_HEIGHT : STANDARD_EXPANDED_HEIGHT;
     }
 
     showPage(target, { animate = true } = {}) {

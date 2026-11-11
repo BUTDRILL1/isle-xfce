@@ -101,7 +101,7 @@ export const AssistantView = GObject.registerClass({
     _init(daemon = null) {
         super._init({
             orientation: Gtk.Orientation.VERTICAL,
-            spacing: 6,
+            spacing: 8,
             css_classes: ['isle-assistant-view'],
             hexpand: true,
             vexpand: true,
@@ -110,68 +110,90 @@ export const AssistantView = GObject.registerClass({
         this._daemon = daemon;
         this._history = [];
 
-        // 1. Top Row: Character Face, Entry / Status, Send button, Close button
-        const topRow = new Gtk.Box({
+        // 1. Header Row (Fixed height): Character Face, Title / Status, New Chat, Close
+        const headerRow = new Gtk.Box({
             orientation: Gtk.Orientation.HORIZONTAL,
             spacing: 10,
-            css_classes: ['isle-voice-row'],
+            css_classes: ['isle-assistant-header'],
             valign: Gtk.Align.START,
         });
 
         // Animated Cairo Bot Character
         this._face = new Face({ shape: 'circle' });
         this._face.set_valign(Gtk.Align.CENTER);
-        topRow.append(this._face);
+        headerRow.append(this._face);
 
-        // Center Container: Status Label or Text Entry
-        const centerBox = new Gtk.Box({
+        // Center Box: Title & Status
+        const statusBox = new Gtk.Box({
             orientation: Gtk.Orientation.VERTICAL,
-            spacing: 2,
+            spacing: 1,
             hexpand: true,
             valign: Gtk.Align.CENTER,
         });
+        const titleLabel = label('Isle Assistant', 'isle-assistant-title');
+        titleLabel.set_halign(Gtk.Align.START);
+        statusBox.append(titleLabel);
 
-        this._entry = new Gtk.Entry({
-            placeholder_text: 'Ask Isle Assistant…',
-            css_classes: ['isle-entry'],
-            hexpand: true,
-        });
-        this._entry.connect('activate', () => this._submit());
-        centerBox.append(this._entry);
-
-        this._statusLabel = label('', 'isle-voice-hint');
+        this._statusLabel = label('Ready', 'isle-assistant-status');
         this._statusLabel.set_halign(Gtk.Align.START);
-        this._statusLabel.set_visible(false);
-        centerBox.append(this._statusLabel);
+        statusBox.append(this._statusLabel);
 
-        topRow.append(centerBox);
+        headerRow.append(statusBox);
 
-        // Action Buttons: Send, Clear/New, Close
-        const actions = new Gtk.Box({
+        // Action Buttons: + New Chat, × Close
+        const headerActions = new Gtk.Box({
             orientation: Gtk.Orientation.HORIZONTAL,
-            spacing: 6,
+            spacing: 4,
             valign: Gtk.Align.CENTER,
         });
 
-        this._sendButton = iconButton('isle-arrow-up-symbolic', 'isle-button-round isle-voice-send', () => {
-            this._submit();
-        }, { size: 14, accessibleName: 'Send prompt' });
-        actions.append(this._sendButton);
+        this._newChatBtn = iconButton('isle-plus-symbolic', 'isle-button-flat', () => {
+            this.clearConversation();
+        }, { size: 13, accessibleName: 'New chat' });
+        headerActions.append(this._newChatBtn);
 
         const closeBtn = iconButton('isle-close-symbolic', 'isle-button-flat', () => {
             this.emit('close-requested');
         }, { size: 14, accessibleName: 'Close Assistant' });
-        actions.append(closeBtn);
+        headerActions.append(closeBtn);
 
-        topRow.append(actions);
-        this.append(topRow);
+        headerRow.append(headerActions);
+        this.append(headerRow);
 
-        // 2. Suggestion Chips (Ideas)
+        // 2. Flexible, Vertically Scrollable Conversation View
+        this._chatView = new ChatView();
+        this._chatView.set_hexpand(true);
+        this._chatView.set_vexpand(true);
+        this._chatView.connect('new-chat', () => {
+            this.clearConversation();
+        });
+        this._chatView.connect('copied', () => {
+            this._statusLabel.set_text('Copied to clipboard');
+            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1200, () => {
+                this._statusLabel.set_text('Ready');
+                return GLib.SOURCE_REMOVE;
+            });
+        });
+        this.append(this._chatView);
+
+        // 3. Interactive Command Approval Card
+        this._commandCard = new CommandCard();
+        this._commandCard.set_visible(false);
+        this._commandCard.connect('decided', (_card, run) => {
+            this._onCardDecided(run);
+        });
+        this._commandCard.connect('stop', () => {
+            this._onCardStop();
+        });
+        this.append(this._commandCard);
+
+        // 4. Compact Horizontal Suggestion Chips
         this._ideasBox = new Gtk.Box({
             orientation: Gtk.Orientation.HORIZONTAL,
             spacing: 6,
             css_classes: ['isle-voice-ideas'],
             halign: Gtk.Align.CENTER,
+            valign: Gtk.Align.END,
         });
         for (const [chipLabel, promptText, autoSend] of IDEAS) {
             const btn = new Gtk.Button({
@@ -191,28 +213,29 @@ export const AssistantView = GObject.registerClass({
         }
         this.append(this._ideasBox);
 
-        // 3. Interactive Command Approval Card
-        this._commandCard = new CommandCard();
-        this._commandCard.set_visible(false);
-        this._commandCard.connect('decided', (_card, run) => {
-            this._onCardDecided(run);
+        // 5. Fixed Input Row at the Bottom
+        const inputRow = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 8,
+            css_classes: ['isle-assistant-input-row'],
+            valign: Gtk.Align.END,
+            hexpand: true,
         });
-        this._commandCard.connect('stop', () => {
-            this._onCardStop();
-        });
-        this.append(this._commandCard);
 
-        // 4. Conversation History View (ChatView)
-        this._chatView = new ChatView();
-        this._chatView.set_vexpand(true);
-        this._chatView.set_visible(false);
-        this._chatView.connect('new-chat', () => {
-            this.clearConversation();
+        this._entry = new Gtk.Entry({
+            placeholder_text: 'Ask Isle Assistant…',
+            css_classes: ['isle-entry', 'isle-voice-entry'],
+            hexpand: true,
         });
-        this._chatView.connect('close', () => {
-            this._chatView.set_visible(false);
-        });
-        this.append(this._chatView);
+        this._entry.connect('activate', () => this._submit());
+        inputRow.append(this._entry);
+
+        this._sendButton = iconButton('isle-arrow-up-symbolic', 'isle-button-round isle-voice-send', () => {
+            this._submit();
+        }, { size: 14, accessibleName: 'Send prompt' });
+        inputRow.append(this._sendButton);
+
+        this.append(inputRow);
 
         // Track pointer movement inside the assistant to turn eyes
         const motion = new Gtk.EventControllerMotion();
@@ -249,8 +272,8 @@ export const AssistantView = GObject.registerClass({
 
         // 2. Character expression -> thinking
         this._face.setForm('thinking');
+        this._statusLabel.set_text('Thinking…');
         this._ideasBox.set_visible(false);
-        this._chatView.set_visible(true);
         this._chatView.setItems(this._history);
 
         this.emit('submitted', text);
@@ -393,10 +416,11 @@ export const AssistantView = GObject.registerClass({
     clearConversation() {
         this._history = [];
         this._chatView.setItems([]);
-        this._chatView.set_visible(false);
         this._commandCard.set_visible(false);
         this._ideasBox.set_visible(true);
         this._face.setForm('listening');
+        this._statusLabel.set_text('Ready');
+        this.focusEntry();
         if (this._daemon) {
             try {
                 this._daemon.call('assistant', 'ClearChat');
