@@ -106,12 +106,84 @@ const INTERFACES = {
             <property name="Items" type="s" access="read"/>`),
         properties: { Items: 'tasks' },
     },
+    shelf: {
+        xml: node('Shelf1', `
+            <method name="Add"><arg name="uris" type="as" direction="in"/></method>
+            <method name="Remove"><arg name="uri" type="s" direction="in"/></method>
+            <method name="Clear"/>
+            <method name="Refresh"/>
+            <property name="Items" type="s" access="read"/>`),
+        properties: { Items: 'shelf' },
+    },
+    share: {
+        xml: node('Share1', `
+            <method name="Start"/>
+            <method name="Stop"/>
+            <method name="Answer"><arg name="id" type="s" direction="in"/><arg name="allow" type="b" direction="in"/></method>
+            <method name="Remove"><arg name="id" type="s" direction="in"/></method>
+            <method name="Code"><arg type="s" direction="out"/></method>
+            <signal name="Received"><arg name="name" type="s"/></signal>
+            <property name="State" type="s" access="read"/>`),
+        properties: { State: 'share' },
+    },
+    clipboard: {
+        xml: node('Clipboard1', `
+            <method name="AddText"><arg name="text" type="s" direction="in"/><arg name="app_id" type="s" direction="in"/><arg type="t" direction="out"/></method>
+            <method name="AddImage"><arg name="png" type="ay" direction="in"/><arg name="app_id" type="s" direction="in"/><arg type="t" direction="out"/></method>
+            <method name="AddFiles"><arg name="uris" type="as" direction="in"/><arg name="app_id" type="s" direction="in"/><arg type="t" direction="out"/></method>
+            <method name="GetText"><arg name="id" type="t" direction="in"/><arg type="s" direction="out"/></method>
+            <method name="Search"><arg name="query" type="s" direction="in"/><arg type="at" direction="out"/></method>
+            <method name="Touch"><arg name="id" type="t" direction="in"/></method>
+            <method name="SetPinned"><arg name="id" type="t" direction="in"/><arg name="pinned" type="b" direction="in"/></method>
+            <method name="Remove"><arg name="id" type="t" direction="in"/></method>
+            <method name="Clear"/>
+            <property name="Items" type="s" access="read"/>`),
+        properties: { Items: 'clipboard' },
+    },
+    calendar: {
+        xml: node('Calendar1', `
+            <method name="Add"><arg name="date" type="s" direction="in"/><arg name="text" type="s" direction="in"/><arg type="t" direction="out"/></method>
+            <method name="AddTo"><arg name="calendar" type="s" direction="in"/><arg name="date" type="s" direction="in"/><arg name="text" type="s" direction="in"/><arg type="s" direction="out"/></method>
+            <method name="Calendars"><arg type="s" direction="out"/></method>
+            <method name="Colors"><arg type="s" direction="out"/></method>
+            <method name="Parse"><arg name="text" type="s" direction="in"/><arg type="s" direction="out"/></method>
+            <method name="Remove"><arg name="id" type="t" direction="in"/></method>
+            <method name="MeetingLink"><arg name="source_uid" type="s" direction="in"/><arg name="event_uid" type="s" direction="in"/><arg type="s" direction="out"/></method>
+            <property name="Events" type="s" access="read"/>`),
+        properties: { Events: 'events' },
+    },
     reminders: {
         xml: node('Reminders1', `
             <method name="Add"><arg name="delay_ms" type="t" direction="in"/><arg name="text" type="s" direction="in"/><arg type="t" direction="out"/></method>
             <method name="Dismiss"><arg name="id" type="t" direction="in"/></method>
             <property name="Items" type="s" access="read"/>`),
         properties: { Items: 'reminders' },
+    },
+    appUsage: {
+        xml: node('AppUsage1', `
+            <method name="Report">
+                <arg name="stretches" type="a(ssxx)" direction="in"/>
+            </method>
+            <method name="GetStats"><arg name="stats" type="s" direction="out"/></method>
+            <method name="Clear"/>`),
+        properties: {},
+    },
+    updates: {
+        xml: node('Updates1', `
+            <method name="SetEnabled"><arg name="enabled" type="b" direction="in"/></method>
+            <property name="Latest" type="s" access="read"/>`),
+        properties: { Latest: 'updates' },
+    },
+    agents: {
+        xml: node('Agents1', `
+            <method name="SetHooked"><arg name="provider" type="s" direction="in"/><arg name="on" type="b" direction="in"/></method>
+            <method name="Resolve"><arg name="id" type="s" direction="in"/><arg name="decision" type="s" direction="in"/></method>
+            <method name="SetPresent"><arg name="present" type="b" direction="in"/></method>
+            <signal name="Event"><arg name="event" type="s"/></signal>
+            <signal name="Asking"><arg name="request" type="s"/></signal>
+            <signal name="Withdrawn"><arg name="id" type="s"/></signal>
+            <property name="Agents" type="s" access="read"/>`),
+        properties: { Agents: 'agents' },
     },
     assistant: {
         xml: node('Assistant1', `
@@ -219,6 +291,15 @@ export class Daemon extends EventEmitter {
                 if (proxy.g_name_owner)
                     this.emit('appeared', name);
             });
+            if (name === 'assistant') {
+                let owner = proxy.g_name_owner;
+                proxy.connect('notify::g-name-owner', () => {
+                    const was = owner;
+                    owner = proxy.g_name_owner;
+                    if (was && was !== owner)
+                        this.emit('assistant-lost');
+                });
+            }
 
             proxy.connect('g-signal', (_proxy, _sender, signal, parameters) =>
                 this._onSignal(name, signal, parameters.deep_unpack()));
@@ -272,12 +353,27 @@ export class Daemon extends EventEmitter {
             break;
         case 'Level':
             this.emit('assistant-level', ...args);
+            this.emit('voice-level', ...args);
             break;
         case 'Notice':
             this.emit('assistant-notice', ...args);
             break;
         case 'ModelSwitched':
             this.emit('assistant-model-switched', ...args);
+            this.emit('model-switched', ...args);
+            break;
+        case 'Withdrawn':
+            this.emit('agent-withdrawn', args[0]);
+            break;
+        case 'Asking':
+            try {
+                this.emit('agent-asking', JSON.parse(args[0]));
+            } catch (e) {
+                console.warn(`Isle: invalid permission request: ${e.message}`);
+            }
+            break;
+        case 'Received':
+            this.emit('phone-received', args[0]);
             break;
         case 'Event':
             try {
@@ -291,6 +387,13 @@ export class Daemon extends EventEmitter {
 
     call(name, method, ...args) {
         return this.attempt(name, method, ...args).then(({ result }) => result);
+    }
+
+    async addEvent(calendar, date, text) {
+        const { result, unknownMethod } = await this.attempt('calendar', 'AddTo', calendar, date, text);
+        if (!unknownMethod)
+            return result;
+        return await this.call('calendar', 'Add', date, text) ? [''] : null;
     }
 
     attempt(name, method, ...args) {

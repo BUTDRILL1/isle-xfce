@@ -13,7 +13,12 @@ import { CompactView } from './compact.js';
 import { Daemon } from './daemon.js';
 import { ExpandedView } from './expanded.js';
 import { Page } from './page.js';
+import { AppsPage } from './pages/apps.js';
+import { CalendarPage } from './pages/calendar.js';
+import { DevicesPage } from './pages/devices.js';
 import { MediaPage } from './pages/media.js';
+import { ShelfPage } from './pages/shelf.js';
+import { TasksPage } from './pages/tasks.js';
 import { TimerPage } from './pages/timer.js';
 import { UsagePage } from './pages/usage.js';
 
@@ -74,6 +79,11 @@ export function init() {
     // 4. Build authentic Page instances for the 10 canonical Isle tabs
     const mediaPage = new MediaPage(daemon);
     const timerPage = new TimerPage(daemon);
+    const tasksPage = new TasksPage(daemon);
+    const shelfPage = new ShelfPage(daemon);
+    const calendarPage = new CalendarPage(daemon);
+    const appsPage = new AppsPage(daemon);
+    const devicesPage = new DevicesPage(daemon);
     const usagePage = new UsagePage(daemon);
 
     const otherPages = [
@@ -97,56 +107,6 @@ export function init() {
                 hint: 'You’re all caught up',
             },
         },
-        {
-            name: 'reminders',
-            available: true,
-            emptyInfo: {
-                iconName: 'isle-tasks',
-                iconSize: 24,
-                title: 'No reminders',
-                hint: 'Tasks and reminders show here',
-            },
-        },
-        {
-            name: 'shelf',
-            available: true,
-            emptyInfo: {
-                iconName: 'isle-shelf',
-                iconSize: 24,
-                title: 'Shelf is empty',
-                hint: 'Drag files or copy text here',
-            },
-        },
-        {
-            name: 'calendar',
-            available: true,
-            emptyInfo: {
-                iconName: 'isle-calendar',
-                iconSize: 24,
-                title: 'No events today',
-                hint: 'Your calendar events line up here',
-            },
-        },
-        {
-            name: 'apps',
-            available: true,
-            emptyInfo: {
-                iconName: 'isle-apps',
-                iconSize: 24,
-                title: 'No usage yet',
-                hint: 'Apps you use show here',
-            },
-        },
-        {
-            name: 'devices',
-            available: true,
-            emptyInfo: {
-                iconName: 'isle-headphones',
-                iconSize: 24,
-                title: 'No devices connected',
-                hint: 'Bluetooth audio devices show here',
-            },
-        },
     ].map(def => new Page(daemon, def));
 
     // Ordered matching canonical Isle tabs:
@@ -156,11 +116,11 @@ export function init() {
         mediaPage,     // music
         otherPages[1], // notifications
         timerPage,     // focus
-        otherPages[2], // reminders
-        otherPages[3], // shelf
-        otherPages[4], // calendar
-        otherPages[5], // apps
-        otherPages[6], // devices
+        tasksPage,     // reminders
+        shelfPage,     // shelf
+        calendarPage,  // calendar
+        appsPage,      // apps
+        devicesPage,   // devices
         usagePage,     // usage
     ];
 

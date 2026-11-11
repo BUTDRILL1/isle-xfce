@@ -124,6 +124,9 @@ export const AssistantView = GObject.registerClass({
         // Animated Cairo Bot Character
         this._face = new Face({ shape: 'circle' });
         this._face.set_valign(Gtk.Align.CENTER);
+        const faceClick = new Gtk.GestureClick();
+        faceClick.connect('released', () => this._toggleListen());
+        this._face.add_controller(faceClick);
         headerRow.append(this._face);
 
         // Center Box: Title & Status
@@ -233,6 +236,11 @@ export const AssistantView = GObject.registerClass({
         this._entry.connect('activate', () => this._submit());
         inputRow.append(this._entry);
 
+        this._micButton = iconButton('isle-mic-symbolic', 'isle-button-round isle-voice-mic', () => {
+            this._toggleListen();
+        }, { size: 14, accessibleName: 'Voice input' });
+        inputRow.append(this._micButton);
+
         this._sendButton = iconButton('isle-arrow-up-symbolic', 'isle-button-round isle-voice-send', () => {
             this._submit();
         }, { size: 14, accessibleName: 'Send prompt' });
@@ -256,6 +264,9 @@ export const AssistantView = GObject.registerClass({
                     this._syncState();
                 }
             });
+            this._daemon.connect('assistant-level', (_d, level) => {
+                this._face.level = level;
+            });
             this._daemon.connect('running-changed', () => {
                 if (!this._daemon.running && this._pendingDecision) {
                     this._pendingDecision.resolve('unanswered');
@@ -264,6 +275,33 @@ export const AssistantView = GObject.registerClass({
             });
             this._syncHistory();
             this._syncState();
+        }
+    }
+
+    _toggleListen() {
+        if (this._daemon?.state?.assistant?.phase === 'listening') {
+            this._daemon.call('assistant', 'Stop').catch(err => {
+                console.warn(`Isle: Assistant Stop D-Bus call failed: ${err.message}`);
+            });
+            return;
+        }
+
+        this._face.setForm('listening');
+        this._statusLabel.set_text('Listening…');
+        this._statusLabel.set_visible(true);
+        this._ideasBox.set_visible(false);
+
+        if (this._daemon) {
+            const context = JSON.stringify({
+                provider: 'nim',
+                nim_model: 'nvidia/nemotron-3.5-super-vl-120b-a12b',
+            });
+            this._daemon.call('assistant', 'Listen', context).catch(err => {
+                console.warn(`Isle: Assistant Listen D-Bus call failed: ${err.message}`);
+                this._face.setForm('confused');
+                this._statusLabel.set_text(err.message || 'Error starting voice listening');
+                this._statusLabel.set_visible(true);
+            });
         }
     }
 
@@ -514,6 +552,10 @@ export const AssistantView = GObject.registerClass({
         const state = this._daemon?.state?.assistant;
         if (!state) return;
 
+        if (state.phase !== 'listening') {
+            this._face.level = 0;
+        }
+
         if (state.phase === 'error') {
             this._face.setForm('confused');
             const errorText = state.error || 'Error';
@@ -538,12 +580,18 @@ export const AssistantView = GObject.registerClass({
             this._face.setForm(state.phase);
         }
 
-        if (state.activity) {
+        if ((state.phase === 'listening' || state.phase === 'transcribing') && state.heard) {
+            this._statusLabel.set_text(`“${state.heard}”`);
+            this._statusLabel.set_visible(true);
+        } else if (state.activity) {
             this._statusLabel.set_text(state.activity);
             this._statusLabel.set_visible(true);
         } else if (state.phase !== 'error') {
             if (state.phase === 'thinking') {
                 this._statusLabel.set_text('Thinking…');
+                this._statusLabel.set_visible(true);
+            } else if (state.phase === 'transcribing') {
+                this._statusLabel.set_text('Transcribing…');
                 this._statusLabel.set_visible(true);
             } else if (state.phase === 'acting') {
                 this._statusLabel.set_text('Working…');
