@@ -249,7 +249,7 @@ export const AppsPage = GObject.registerClass({
 
             // App Name
             const nameLbl = label(app.name || app.id || 'App', 'isle-apps-name', {
-                min_width_chars: 10,
+                width_chars: 10,
                 halign: Gtk.Align.START,
             });
             nameLbl.set_ellipsize(Pango.EllipsizeMode.END);

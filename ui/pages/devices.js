@@ -173,7 +173,7 @@ export const DevicesPage = GObject.registerClass({
             size: 16,
             accessibleName: 'Toggle mute speaker',
         });
-        const sinkLbl = label('Output', 'isle-device-name', { min_width_chars: 6 });
+        const sinkLbl = label('Output', 'isle-device-name', { width_chars: 6 });
         this._sinkSlider = new Slider({ scrollStep: 0.05 });
         this._sinkSlider.connect('released', (_slider, val) => {
             this._sinkVolume = val;
@@ -199,7 +199,7 @@ export const DevicesPage = GObject.registerClass({
             size: 16,
             accessibleName: 'Toggle mute microphone',
         });
-        const sourceLbl = label('Input', 'isle-device-name', { min_width_chars: 6 });
+        const sourceLbl = label('Input', 'isle-device-name', { width_chars: 6 });
         this._sourceSlider = new Slider({ scrollStep: 0.05 });
         this._sourceSlider.connect('released', (_slider, val) => {
             this._sourceVolume = val;
