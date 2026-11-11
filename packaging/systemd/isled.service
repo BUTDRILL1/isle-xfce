@@ -1,0 +1,10 @@
+[Unit]
+Description=Isle Background Daemon (isled)
+
+[Service]
+ExecStart=%h/.local/bin/isled
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

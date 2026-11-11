@@ -1,0 +1,12 @@
+[Unit]
+Description=Isle XFCE Floating Notch UI
+After=graphical-session.target isled.service
+Wants=isled.service
+
+[Service]
+ExecStart=%h/.local/bin/isle-ui
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

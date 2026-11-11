@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 zickrian
 
-//! Speech to text: `isle-whisper` (whisper.cpp, on the GPU through Vulkan or on the processor).
+//! Speech to text: Handy (Parakeet Unified English 0.6B) or `isle-whisper` (whisper.cpp).
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -19,6 +19,9 @@ use tokio::process::{ChildStdin, ChildStdout, Command};
 use super::child::{self, Group};
 use crate::store::{data_dir, write_private};
 
+pub const PARAKEET_MODEL: &str =
+    "handy-computer/parakeet-unified-en-0.6b-gguf/parakeet-unified-en-0.6b-Q8_0.gguf";
+
 const NATIVE: &str = "isle-whisper";
 /// Set, the user picked the GPUs (by their Vulkan numbers) the helper may use.
 const PINNED: &str = "GGML_VK_VISIBLE_DEVICES";
@@ -29,6 +32,18 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 static GPU_FAILED: AtomicBool = AtomicBool::new(false);
 /// Set once the helper found no GPU to use: later ones skip loading Vulkan, until isled restarts.
 static NO_GPU: AtomicBool = AtomicBool::new(false);
+
+/// Where `handy` is installed: `/usr/bin/handy` or on the PATH.
+fn handy() -> Option<PathBuf> {
+    let fixed = PathBuf::from("/usr/bin/handy");
+    if fixed.is_file() {
+        return Some(fixed);
+    }
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    std::env::split_paths(&path)
+        .map(|dir| dir.join("handy"))
+        .find(|path| path.is_file())
+}
 
 /// `isle-whisper` beside isled (both go in ~/.local/bin), else on the PATH.
 fn native() -> Option<PathBuf> {
@@ -55,13 +70,19 @@ fn downloaded(dir: &Path) -> Vec<&'static str> {
         .collect()
 }
 
-/// Whether speech recognition is set up: `isle-whisper` and a model for it.
+/// Whether speech recognition is set up: `handy`, or `isle-whisper` and a model for it.
 pub fn installed() -> bool {
-    native().is_some() && !downloaded(&models_dir()).is_empty()
+    handy().is_some() || (native().is_some() && !downloaded(&models_dir()).is_empty())
 }
 
 /// What `isled --doctor` says about speech recognition.
 pub fn report() -> String {
+    if let Some(h) = handy() {
+        return format!(
+            "  Speech recognition: {} (model: Parakeet Unified English 0.6B), on Vulkan GPU",
+            h.display()
+        );
+    }
     let models = downloaded(&models_dir());
     match native() {
         Some(native) if !models.is_empty() => format!(
@@ -126,6 +147,52 @@ fn threads() -> usize {
     std::thread::available_parallelism().map_or(1, |n| (n.get() / 2).max(1))
 }
 
+/// Builds a valid 44-byte RIFF/WAVE header (16000 Hz, 1 channel, 16 bits per sample, PCM format = 1)
+/// followed by little-endian i16 sample bytes.
+fn encode_wav_16k_mono(samples: &[i16]) -> Vec<u8> {
+    let data_len = samples.len().saturating_mul(2) as u32;
+    let riff_chunk_size = 36u32.saturating_add(data_len);
+    let mut wav = Vec::with_capacity(44 + (data_len as usize));
+
+    // RIFF chunk descriptor
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&riff_chunk_size.to_le_bytes());
+    wav.extend_from_slice(b"WAVE");
+
+    // "fmt " sub-chunk
+    wav.extend_from_slice(b"fmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes()); // Subchunk1Size (16 for PCM)
+    wav.extend_from_slice(&1u16.to_le_bytes());  // AudioFormat (1 for PCM)
+    wav.extend_from_slice(&1u16.to_le_bytes());  // NumChannels (1 mono)
+    wav.extend_from_slice(&16000u32.to_le_bytes()); // SampleRate (16000 Hz)
+    wav.extend_from_slice(&32000u32.to_le_bytes()); // ByteRate (16000 * 1 * 2 = 32000)
+    wav.extend_from_slice(&2u16.to_le_bytes());  // BlockAlign (1 * 2 = 2)
+    wav.extend_from_slice(&16u16.to_le_bytes()); // BitsPerSample (16 bits)
+
+    // "data" sub-chunk
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&data_len.to_le_bytes());
+
+    for &sample in samples {
+        wav.extend_from_slice(&sample.to_le_bytes());
+    }
+
+    wav
+}
+
+/// Finds the last line in stdout starting with '{', parses it as JSON, and extracts the text field.
+fn parse_handy_output(stdout: &str) -> anyhow::Result<String> {
+    for line in stdout.lines().rev() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('{') {
+            let val: Value =
+                serde_json::from_str(trimmed).context("could not parse handy JSON output")?;
+            return Ok(val["text"].as_str().unwrap_or_default().trim().to_owned());
+        }
+    }
+    anyhow::bail!("no JSON output from handy")
+}
+
 /// An error the helper answered with, as opposed to the helper stopping.
 #[derive(Debug)]
 struct Answered(String);
@@ -139,32 +206,55 @@ impl fmt::Display for Answered {
 
 impl std::error::Error for Answered {}
 
-/// A running `isle-whisper`, kept for one voice request.
+/// The speech recognition engine backend.
+#[allow(clippy::large_enum_variant)]
+pub enum Backend {
+    Handy {
+        bin: PathBuf,
+        #[allow(dead_code)]
+        audio: PathBuf,
+    },
+    Native {
+        _child: Group,
+        stdin: ChildStdin,
+        lines: Lines<BufReader<ChildStdout>>,
+        ready: bool,
+        helper: PathBuf,
+        model: String,
+        language: String,
+    },
+}
+
+/// A running speech recognition engine, kept for one voice request.
 pub struct Whisper {
-    _child: Group,
-    stdin: ChildStdin,
-    lines: Lines<BufReader<ChildStdout>>,
-    ready: bool,
-    /// What it was started with, to start again on the processor.
-    helper: PathBuf,
-    model: String,
-    language: String,
-    /// `isle-whisper` free to use the GPU, so falling back to the processor is still possible.
-    on_gpu: bool,
-    /// Where a recording waits for the helper; removed after each one, and on drop.
+    backend: Backend,
     audio: PathBuf,
+    on_gpu: bool,
 }
 
 impl Whisper {
-    /// Starts the helper; it loads the model while the user is still speaking. Without the model it
-    /// starts all the same, and answers that the model is not downloaded.
+    /// Starts the speech recognition engine; uses handy with Parakeet if available,
+    /// otherwise starts `isle-whisper`.
     pub fn start(model: &str, language: &str) -> anyhow::Result<Self> {
+        if let Some(bin) = handy() {
+            let audio = dirs::runtime_dir()
+                .unwrap_or_else(data_dir)
+                .join(format!("isle-voice-{}.wav", std::process::id()));
+            return Ok(Self {
+                backend: Backend::Handy {
+                    bin,
+                    audio: audio.clone(),
+                },
+                audio,
+                on_gpu: true,
+            });
+        }
         let helper = native().context("speech recognition is not set up")?;
         let cpu = GPU_FAILED.load(Ordering::Relaxed) || NO_GPU.load(Ordering::Relaxed);
         Self::start_with(helper, model, language, cpu)
     }
 
-    /// Starts the helper, on the processor only when `cpu` is set.
+    /// Starts `isle-whisper`, on the processor only when `cpu` is set.
     fn start_with(helper: PathBuf, model: &str, language: &str, cpu: bool) -> anyhow::Result<Self> {
         let mut command = Command::new(&helper);
         if cpu {
@@ -187,66 +277,92 @@ impl Whisper {
             .unwrap_or_else(data_dir)
             .join(format!("isle-voice-{}.pcm", std::process::id()));
         Ok(Self {
-            _child: child,
-            stdin,
-            lines,
-            ready: false,
-            helper,
-            model: model.to_owned(),
-            language: language.to_owned(),
-            on_gpu: !cpu,
+            backend: Backend::Native {
+                _child: child,
+                stdin,
+                lines,
+                ready: false,
+                helper,
+                model: model.to_owned(),
+                language: language.to_owned(),
+            },
             audio,
+            on_gpu: !cpu,
         })
-    }
-
-    /// The helper's next JSON line; an `error` in it becomes an `Answered`.
-    async fn read(&mut self) -> anyhow::Result<Value> {
-        let line = self
-            .lines
-            .next_line()
-            .await?
-            .context("speech recognition stopped")?;
-        let message: Value = serde_json::from_str(&line)?;
-        if let Some(error) = message["error"].as_str() {
-            return Err(Answered(error.to_owned()).into());
-        }
-        Ok(message)
     }
 
     /// The words in `audio` (16 kHz mono), tried once more on the processor if the GPU crashed.
     pub async fn transcribe(&mut self, audio: &[i16]) -> anyhow::Result<String> {
-        let mut result = self.attempt(audio).await;
-        let stopped = match &result {
-            Err(err) if self.on_gpu && err.downcast_ref::<Answered>().is_none() => {
-                Some(format!("{err:#}"))
+        match &mut self.backend {
+            Backend::Handy { bin, .. } => {
+                let wav_bytes = encode_wav_16k_mono(audio);
+                write_private(&self.audio, &wav_bytes)?;
+                let audio_str = self.audio.to_string_lossy();
+                let output = Command::new(bin)
+                    .args([
+                        "--transcribe-file",
+                        &audio_str,
+                        "--model",
+                        PARAKEET_MODEL,
+                        "--json",
+                    ])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .output()
+                    .await;
+                tokio::fs::remove_file(&self.audio).await.ok();
+                let output = output.context("failed to execute handy")?;
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                parse_handy_output(&stdout)
             }
-            _ => None,
-        };
-        if let Some(err) = stopped {
-            // It stopped on the GPU (a driver crash): the same words again, on the processor.
-            warn!("speech recognition stopped on the GPU ({err}); using the processor from now on");
-            GPU_FAILED.store(true, Ordering::Relaxed);
-            let cpu = Self::start_with(self.helper.clone(), &self.model, &self.language, true);
-            result = match cpu {
-                Ok(mut cpu) => {
-                    cpu.audio = self.audio.clone();
-                    // The old helper (and its recording, removed on drop) goes.
-                    *self = cpu;
-                    self.attempt(audio).await
+            Backend::Native {
+                helper,
+                model,
+                language,
+                ..
+            } => {
+                let helper = helper.clone();
+                let model = model.clone();
+                let language = language.clone();
+                let mut result = self.transcribe_native_attempt(audio).await;
+                let stopped = match &result {
+                    Err(err) if self.on_gpu && err.downcast_ref::<Answered>().is_none() => {
+                        Some(format!("{err:#}"))
+                    }
+                    _ => None,
+                };
+                if let Some(err) = stopped {
+                    // It stopped on the GPU (a driver crash): the same words again, on the processor.
+                    warn!("speech recognition stopped on the GPU ({err}); using the processor from now on");
+                    GPU_FAILED.store(true, Ordering::Relaxed);
+                    let cpu = Self::start_with(helper, &model, &language, true);
+                    result = match cpu {
+                        Ok(mut cpu) => {
+                            cpu.audio = self.audio.clone();
+                            // The old helper (and its recording, removed on drop) goes.
+                            *self = cpu;
+                            self.transcribe_native_attempt(audio).await
+                        }
+                        Err(err) => Err(err),
+                    };
                 }
-                Err(err) => Err(err),
-            };
+                // What was said is not left on disk, whatever happened.
+                tokio::fs::remove_file(&self.audio).await.ok();
+                result
+            }
         }
-        // What was said is not left on disk, whatever happened.
-        tokio::fs::remove_file(&self.audio).await.ok();
-        result
     }
 
-    /// Waits for the helper to load its model once, then asks it.
-    async fn attempt(&mut self, audio: &[i16]) -> anyhow::Result<String> {
-        if !self.ready {
-            let ready = self.read().await?;
-            let device = ready["device"].as_str();
+    /// Waits for `isle-whisper` to load its model once, then asks it.
+    async fn transcribe_native_attempt(&mut self, audio: &[i16]) -> anyhow::Result<String> {
+        let (lines, ready) = match &mut self.backend {
+            Backend::Native { lines, ready, .. } => (lines, ready),
+            _ => anyhow::bail!("not native backend"),
+        };
+        if !*ready {
+            let ready_msg = Self::read_native_line(lines).await?;
+            let device = ready_msg["device"].as_str();
             info!(
                 "speech recognition runs on {}",
                 device.unwrap_or("an unknown device")
@@ -255,20 +371,24 @@ impl Whisper {
             if self.on_gpu && device == Some("cpu") && std::env::var_os(PINNED).is_none() {
                 NO_GPU.store(true, Ordering::Relaxed);
             }
-            self.ready = true;
+            *ready = true;
         }
-        self.ask(audio).await
+        self.transcribe_native_ask(audio).await
     }
 
-    /// Hands the recording over as a file and reads back the text.
-    async fn ask(&mut self, audio: &[i16]) -> anyhow::Result<String> {
+    /// Hands the recording over as a file and reads back the text from `isle-whisper`.
+    async fn transcribe_native_ask(&mut self, audio: &[i16]) -> anyhow::Result<String> {
+        let (stdin, lines) = match &mut self.backend {
+            Backend::Native { stdin, lines, .. } => (stdin, lines),
+            _ => anyhow::bail!("not native backend"),
+        };
         let bytes: Vec<u8> = audio.iter().flat_map(|s| s.to_le_bytes()).collect();
         write_private(&self.audio, &bytes)?;
         let request = serde_json::json!({"audio": self.audio});
-        self.stdin
+        stdin
             .write_all(format!("{request}\n").as_bytes())
             .await?;
-        let reply = self.read().await?;
+        let reply = Self::read_native_line(lines).await?;
         let text = reply["text"].as_str().unwrap_or_default().to_owned();
         if text.trim().is_empty() {
             // Why "Didn't catch that": no speech found in it, or what Whisper made of it not counted as said.
@@ -297,6 +417,19 @@ impl Whisper {
             );
         }
         Ok(text)
+    }
+
+    /// The helper's next JSON line; an `error` in it becomes an `Answered`.
+    async fn read_native_line(lines: &mut Lines<BufReader<ChildStdout>>) -> anyhow::Result<Value> {
+        let line = lines
+            .next_line()
+            .await?
+            .context("speech recognition stopped")?;
+        let message: Value = serde_json::from_str(&line)?;
+        if let Some(error) = message["error"].as_str() {
+            return Err(Answered(error.to_owned()).into());
+        }
+        Ok(message)
     }
 }
 
@@ -378,5 +511,64 @@ mod tests {
         );
         assert!(device_name(r#"{"error":"needs AVX2"}"#).contains("needs AVX2"));
         assert!(device_name("").contains("processor"));
+    }
+
+    #[test]
+    fn wav_header_encoding_is_valid_16khz_mono() {
+        let samples: Vec<i16> = vec![0, 100, -100, 32767, -32768];
+        let wav = encode_wav_16k_mono(&samples);
+        assert_eq!(wav.len(), 44 + samples.len() * 2);
+        assert_eq!(&wav[0..4], b"RIFF");
+        let chunk_size = u32::from_le_bytes(wav[4..8].try_into().unwrap());
+        assert_eq!(chunk_size, 36 + (samples.len() * 2) as u32);
+        assert_eq!(&wav[8..12], b"WAVE");
+        assert_eq!(&wav[12..16], b"fmt ");
+        let subchunk1_size = u32::from_le_bytes(wav[16..20].try_into().unwrap());
+        assert_eq!(subchunk1_size, 16);
+        let audio_format = u16::from_le_bytes(wav[20..22].try_into().unwrap());
+        assert_eq!(audio_format, 1);
+        let num_channels = u16::from_le_bytes(wav[22..24].try_into().unwrap());
+        assert_eq!(num_channels, 1);
+        let sample_rate = u32::from_le_bytes(wav[24..28].try_into().unwrap());
+        assert_eq!(sample_rate, 16000);
+        let byte_rate = u32::from_le_bytes(wav[28..32].try_into().unwrap());
+        assert_eq!(byte_rate, 32000);
+        let block_align = u16::from_le_bytes(wav[32..34].try_into().unwrap());
+        assert_eq!(block_align, 2);
+        let bits_per_sample = u16::from_le_bytes(wav[34..36].try_into().unwrap());
+        assert_eq!(bits_per_sample, 16);
+        assert_eq!(&wav[36..40], b"data");
+        let data_size = u32::from_le_bytes(wav[40..44].try_into().unwrap());
+        assert_eq!(data_size, (samples.len() * 2) as u32);
+
+        for (i, &sample) in samples.iter().enumerate() {
+            let offset = 44 + i * 2;
+            let s = i16::from_le_bytes(wav[offset..offset + 2].try_into().unwrap());
+            assert_eq!(s, sample);
+        }
+    }
+
+    #[test]
+    fn parses_handy_json_output_with_log_prefix() {
+        let stdout = "\
+[2026-11-11][20:39:51][handy_app_lib::system_languages][INFO] System languages: [\"en-US\"]
+[2026-11-11][20:39:51][handy_app_lib::managers::model][INFO] Seeded 73 catalog model(s)
+[2026-11-11][20:39:51][transcribe_worker][INFO] [transcribe_cpp] load_backend: loaded Vulkan backend
+[2026-11-11][20:39:51][handy_app_lib::managers::transcription][INFO] Transcription completed in 0.12s
+{\"audio_secs\":1.0,\"best_ms\":122,\"model\":\"handy-computer/parakeet-unified-en-0.6b-gguf/parakeet-unified-en-0.6b-Q8_0.gguf\",\"text\":\"  hello handy parakeet  \"}
+";
+        let parsed = parse_handy_output(stdout).unwrap();
+        assert_eq!(parsed, "hello handy parakeet");
+    }
+
+    #[test]
+    fn handy_binary_detection() {
+        if Path::new("/usr/bin/handy").is_file() {
+            assert!(handy().is_some());
+            assert!(installed());
+            let rep = report();
+            assert!(rep.contains("Parakeet Unified English 0.6B"));
+            assert!(rep.contains("Vulkan GPU"));
+        }
     }
 }

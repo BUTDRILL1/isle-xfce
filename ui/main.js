@@ -167,6 +167,8 @@ export function init() {
                     const tabName = new TextDecoder().decode(contents).trim();
                     f.delete(null);
                     print(`[Isle GJS IPC] Switching to requested tab: ${tabName}`);
+                    win.add_css_class('isle-force-expand');
+                    updateVisibility(true);
                     expandedView.showPage(tabName);
                 }
             }
@@ -180,21 +182,33 @@ export function init() {
                     print(`[Isle GJS IPC] Assistant command: ${cmd}`);
                     if (cmd === 'open') {
                         expandedView.toggleAssistant(true);
+                        updateVisibility(true);
+                    } else if (cmd === 'toggle') {
+                        if (expandedView.isAssistantOpen) {
+                            expandedView.toggleAssistant(false);
+                        } else {
+                            expandedView.toggleAssistant(true);
+                            updateVisibility(true);
+                        }
                     } else if (cmd === 'close') {
                         expandedView.toggleAssistant(false);
                     } else if (cmd.startsWith('ask:')) {
                         expandedView.toggleAssistant(true);
+                        updateVisibility(true);
                         const q = cmd.slice(4);
                         expandedView.assistantView._entry.set_text(q);
                         expandedView.assistantView._submit();
                     } else if (cmd === 'test-card-root') {
                         expandedView.toggleAssistant(true);
+                        updateVisibility(true);
                         expandedView.assistantView._presentCommandApprovalCard('install system package');
                     } else if (cmd === 'test-card-removes') {
                         expandedView.toggleAssistant(true);
+                        updateVisibility(true);
                         expandedView.assistantView._presentCommandApprovalCard('remove cached files');
                     } else if (cmd === 'test-card-script') {
                         expandedView.toggleAssistant(true);
+                        updateVisibility(true);
                         expandedView.assistantView._presentCommandApprovalCard('run remote script');
                     } else if (cmd === 'approve') {
                         expandedView.assistantView._onCardDecided(true);

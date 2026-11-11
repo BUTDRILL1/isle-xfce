@@ -414,9 +414,20 @@ impl FloatingWindow {
         floating.0.window.connect_css_classes_notify(move |win| {
             if let Some(inner) = weak_css.upgrade() {
                 let is_asst = win.has_css_class("isle-mode-assistant");
-                info!("[MODE] Window css-classes changed: isle-mode-assistant={is_asst}");
+                let is_force = win.has_css_class("isle-force-expand");
+                info!(
+                    "[MODE] Window css-classes changed: isle-mode-assistant={is_asst}, isle-force-expand={is_force}"
+                );
                 let floating = FloatingWindow(inner);
-                floating.update_target_geometry("css-classes-changed");
+                if is_asst && !floating.0.is_expanded.get() {
+                    floating.set_expanded(true, "assistant-hotkey");
+                } else if is_force && !floating.0.is_expanded.get() {
+                    floating.set_expanded(true, "force-expand");
+                } else if !is_asst && !is_force && !floating.0.is_hovered.get() && floating.0.is_expanded.get() {
+                    floating.set_expanded(false, "mode-close");
+                } else {
+                    floating.update_target_geometry("css-classes-changed");
+                }
             }
         });
 
@@ -452,6 +463,7 @@ impl FloatingWindow {
                 let _ = self.0.x11.focus_window(xid);
             }
         } else {
+            self.0.window.remove_css_class("isle-force-expand");
             // Restore previous X11 focus window when collapsing
             let prev = self.0.previous_focus.take();
             let _ = self.0.x11.restore_focus(prev);

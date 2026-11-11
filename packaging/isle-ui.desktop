@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=Isle Floating Notch
+Exec=isle-ui
+Type=Application
+Terminal=false
+Categories=Utility;
+X-GNOME-Autostart-enabled=true
+OnlyShowIn=XFCE;
