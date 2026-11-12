@@ -253,7 +253,7 @@ pub async fn watch(
         gap: GapBridge::default(),
         gap_check: None,
         chosen: None,
-        lyrics_online: None,
+        lyrics_online: Some(true),
         lyrics_waiting: false,
         watching: false,
         polled_at: None,
@@ -1017,7 +1017,7 @@ enum LyricsStep {
 fn lyrics_step(online: Option<bool>, query: &TrackQuery, length_coming: bool) -> LyricsStep {
     match online {
         Some(false) => LyricsStep::Off,
-        Some(true) if !length_coming || query.length_s > 0.0 => LyricsStep::Fetch,
+        _ if !length_coming || query.length_s > 0.0 => LyricsStep::Fetch,
         _ => LyricsStep::Wait,
     }
 }

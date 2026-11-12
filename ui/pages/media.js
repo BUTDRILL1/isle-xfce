@@ -548,9 +548,9 @@ export const MediaPage = GObject.registerClass({
         const nowPlaying = this.daemon?.state?.nowPlaying;
         if (!this._lyricsColumn) return;
 
-        const trackKey = `${nowPlaying?.artist || ''}-${nowPlaying?.title || ''}`;
-        if (this._lastLyricsKey !== trackKey) {
-            this._lastLyricsKey = trackKey;
+        const lyricsKey = `${nowPlaying?.artist || ''}-${nowPlaying?.title || ''}-${lyrics?.status || ''}-${lyrics?.lines?.length || 0}`;
+        if (this._lastLyricsKey !== lyricsKey) {
+            this._lastLyricsKey = lyricsKey;
             this.daemon.call('media', 'SetLyrics', true);
 
             while (this._lyricsColumn.get_first_child()) {
