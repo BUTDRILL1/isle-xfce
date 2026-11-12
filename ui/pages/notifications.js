@@ -296,10 +296,10 @@ export const NotificationsPage = GObject.registerClass({
     }
 
     _buildRow(notification, { badgeCount = 0, onStackClick = null } = {}) {
-        const row = new Gtk.Button({
+        const row = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
             css_classes: ['isle-notification-row'],
             hexpand: true,
-            can_focus: true,
         });
 
         const content = new Gtk.Box({
@@ -380,16 +380,17 @@ export const NotificationsPage = GObject.registerClass({
             css_classes: ['isle-notification-reply-entry'],
         });
 
+        let sendBtn = null;
         const sendReply = () => {
             const text = replyEntry.get_text().trim();
             if (text) {
-                this._sendReply(notification, text);
+                this._sendReply(notification, text, sendBtn, replyEntry);
             }
         };
 
         replyEntry.connect('activate', sendReply);
 
-        const sendBtn = pillButton('Send', 'isle-notification-reply-send', sendReply);
+        sendBtn = pillButton('Send', 'isle-notification-reply-send', sendReply);
         replyBox.append(replyEntry);
         replyBox.append(sendBtn);
         replyRevealer.set_child(replyBox);
@@ -407,7 +408,10 @@ export const NotificationsPage = GObject.registerClass({
                 const nowOpen = !replyRevealer.get_reveal_child();
                 replyRevealer.set_reveal_child(nowOpen);
                 if (nowOpen) {
-                    replyEntry.grab_focus();
+                    GLib.timeout_add(GLib.PRIORITY_DEFAULT, 50, () => {
+                        replyEntry.grab_focus();
+                        return GLib.SOURCE_REMOVE;
+                    });
                 }
             });
             actionsBox.append(replyActionBtn);
@@ -452,44 +456,52 @@ export const NotificationsPage = GObject.registerClass({
         corner.append(dismissBtn);
 
         content.append(corner);
-        row.set_child(content);
+        row.append(content);
 
-        // Clicking card
-        row.connect('clicked', () => {
-            if (onStackClick) {
-                onStackClick();
-            } else if (isMessaging) {
-                // Focus WhatsApp directly
-                GLib.spawn_command_line_async('wmctrl -a "WhatsApp"');
-                this.emit('request-close');
-            } else {
-                notification.activate();
-                this.emit('request-close');
-            }
-        });
+        // Only clicking stack card header expands stack
+        if (onStackClick) {
+            const stackClick = new Gtk.GestureClick();
+            stackClick.connect('released', () => {
+                if (!replyRevealer.get_reveal_child()) {
+                    onStackClick();
+                }
+            });
+            titleRow.add_controller(stackClick);
+        }
 
         return row;
     }
 
-    _sendReply(notification, text) {
+    _sendReply(notification, text, sendBtn, replyEntry) {
         try {
-            // 1. Copy reply text to system clipboard
-            const display = Gdk.Display.get_default();
-            const clipboard = display.get_clipboard();
-            clipboard.set(text);
+            if (sendBtn) sendBtn.set_label('✓ Sent');
+            if (replyEntry) replyEntry.set_sensitive(false);
 
-            // 2. Bring WhatsApp Web / client window to the foreground
-            GLib.spawn_command_line_async('wmctrl -a "WhatsApp"');
+            // Execute background dispatch restoring active window focus instantly
+            const escapedText = text.replace(/'/g, "'\\''");
+            const script = `
+                ORIG_WIN=$(xdotool getactivewindow 2>/dev/null)
+                WA_WIN=$(xdotool search --name "WhatsApp" 2>/dev/null | head -n 1)
+                if [ -n "$WA_WIN" ]; then
+                    echo -n '${escapedText}' | xclip -selection clipboard
+                    xdotool windowactivate --sync "$WA_WIN"
+                    sleep 0.04
+                    xdotool key --clearmodifiers ctrl+v
+                    sleep 0.04
+                    xdotool key Return
+                    sleep 0.04
+                    if [ -n "$ORIG_WIN" ]; then
+                        xdotool windowactivate "$ORIG_WIN"
+                    fi
+                fi
+            `;
+            GLib.spawn_command_line_async(`bash -c "${script.replace(/\n/g, ' ')}"`);
 
-            // 3. Automatically paste and hit Enter to send
-            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 350, () => {
-                GLib.spawn_command_line_async('xdotool key "ctrl+v" Return');
+            // Dismiss notification card cleanly after confirmation
+            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 500, () => {
+                notification.destroy();
                 return GLib.SOURCE_REMOVE;
             });
-
-            // 4. Dismiss notification & request close
-            notification.destroy();
-            this.emit('request-close');
         } catch (e) {
             logError(e, '[Isle Notifications] Error sending quick reply');
         }
