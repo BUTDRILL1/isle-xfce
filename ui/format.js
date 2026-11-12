@@ -62,6 +62,20 @@ export function phaseName(phase) {
     }[phase] ?? phase;
 }
 
+/** How long ago a GLib.DateTime was: "now", "5m", "2h", or "Mon". */
+export function ago(dateTime) {
+    if (!dateTime) return '';
+    const now = GLib.DateTime.new_now_local();
+    const minutes = Math.floor(now.difference(dateTime) / 60e6);
+    if (minutes < 1)
+        return 'now';
+    if (minutes < 60)
+        return `${minutes}m`;
+    if (minutes < 24 * 60)
+        return `${Math.floor(minutes / 60)}h`;
+    return dateTime.format(minutes < 6 * 24 * 60 ? '%a' : '%-d %b');
+}
+
 export function nowMs() {
     return Math.floor(GLib.get_real_time() / 1000);
 }

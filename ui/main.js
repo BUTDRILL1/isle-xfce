@@ -13,10 +13,12 @@ import { CompactView } from './compact.js';
 import { Daemon } from './daemon.js';
 import { ExpandedView } from './expanded.js';
 import { Page } from './page.js';
+import { NotificationCenter } from './notifications.js';
 import { AppsPage } from './pages/apps.js';
 import { CalendarPage } from './pages/calendar.js';
 import { DevicesPage } from './pages/devices.js';
 import { MediaPage } from './pages/media.js';
+import { NotificationsPage } from './pages/notifications.js';
 import { ShelfPage } from './pages/shelf.js';
 import { TasksPage } from './pages/tasks.js';
 import { TimerPage } from './pages/timer.js';
@@ -76,8 +78,13 @@ export function init() {
     const daemon = new Daemon();
     globalThis.isleDaemon = daemon;
 
+    // Notification center & FreeDesktop notification server
+    const notificationCenter = new NotificationCenter();
+    globalThis.isleNotifications = notificationCenter;
+
     // 4. Build authentic Page instances for the 10 canonical Isle tabs
     const mediaPage = new MediaPage(daemon);
+    const notificationsPage = new NotificationsPage(daemon, notificationCenter);
     const timerPage = new TimerPage(daemon);
     const tasksPage = new TasksPage(daemon);
     const shelfPage = new ShelfPage(daemon);
@@ -86,42 +93,30 @@ export function init() {
     const devicesPage = new DevicesPage(daemon);
     const usagePage = new UsagePage(daemon);
 
-    const otherPages = [
-        {
-            name: 'call',
-            available: false,
-            emptyInfo: {
-                iconName: 'isle-phone',
-                iconSize: 24,
-                title: 'No active call',
-                hint: 'Audio and video calls show here',
-            },
+    const callPage = new Page(daemon, {
+        name: 'call',
+        available: false,
+        emptyInfo: {
+            iconName: 'isle-phone',
+            iconSize: 24,
+            title: 'No active call',
+            hint: 'Audio and video calls show here',
         },
-        {
-            name: 'notifications',
-            available: true,
-            emptyInfo: {
-                iconName: 'isle-bell',
-                iconSize: 24,
-                title: 'No notifications',
-                hint: 'You’re all caught up',
-            },
-        },
-    ].map(def => new Page(daemon, def));
+    });
 
     // Ordered matching canonical Isle tabs:
     // call, music, notifications, focus, reminders, shelf, calendar, apps, devices, usage
     const pages = [
-        otherPages[0], // call
-        mediaPage,     // music
-        otherPages[1], // notifications
-        timerPage,     // focus
-        tasksPage,     // reminders
-        shelfPage,     // shelf
-        calendarPage,  // calendar
-        appsPage,      // apps
-        devicesPage,   // devices
-        usagePage,     // usage
+        callPage,          // call
+        mediaPage,         // music
+        notificationsPage, // notifications
+        timerPage,         // focus
+        tasksPage,         // reminders
+        shelfPage,         // shelf
+        calendarPage,      // calendar
+        appsPage,          // apps
+        devicesPage,       // devices
+        usagePage,         // usage
     ];
 
     // 5. Mount CompactView and ExpandedView onto overlay
