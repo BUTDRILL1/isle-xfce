@@ -355,9 +355,31 @@ export const MediaPage = GObject.registerClass({
     _toggleVolume() {
         this._showVolume = !this._showVolume;
         if (this._showVolume) {
-            this._refreshAudio();
+            this._lastOutputsRefreshTime = 0;
+            this._startAudioLoop();
+        } else {
+            this.cancel('audio-poll');
         }
         this._syncModeState();
+    }
+
+    _startAudioLoop() {
+        this.cancel('audio-poll');
+        if (!this._showVolume) return;
+        this._refreshAudio().finally(() => {
+            if (this._showVolume) {
+                this.later('audio-poll', 200, () => this._startAudioLoop(), { keep: true });
+            }
+        });
+    }
+
+    setActive(active) {
+        super.setActive(active);
+        if (active && this._showVolume) {
+            this._startAudioLoop();
+        } else {
+            this.cancel('audio-poll');
+        }
     }
 
     _toggleLyrics() {
@@ -402,14 +424,20 @@ export const MediaPage = GObject.registerClass({
         this._audioVolume = vol;
         this._audioMuted = isMuted;
 
-        if (this._volumeSlider) this._volumeSlider.value = vol;
-        if (this._volumeText) this._volumeText.set_text(`${Math.round(vol * 100)}%`);
+        if (Date.now() - (this._lastUserVolumeTime || 0) > 350) {
+            if (this._volumeSlider) this._volumeSlider.value = vol;
+            if (this._volumeText) this._volumeText.set_text(`${Math.round(vol * 100)}%`);
+        }
         if (this._volumeMuteBtn) {
             const iconName = isMuted ? 'audio-volume-muted' : (vol > 0.5 ? 'audio-volume-high-symbolic' : 'audio-volume-medium-symbolic');
             setButtonIcon(this._volumeMuteBtn, iconName);
         }
 
-        this._refreshAudioOutputs();
+        const now = Date.now();
+        if (now - (this._lastOutputsRefreshTime || 0) > 2000) {
+            this._lastOutputsRefreshTime = now;
+            this._refreshAudioOutputs();
+        }
     }
 
     async _refreshAudioOutputs() {
@@ -466,6 +494,7 @@ export const MediaPage = GObject.registerClass({
     }
 
     _toggleAudioMute() {
+        this._lastOutputsRefreshTime = 0;
         runAsync(['wpctl', 'set-mute', '@DEFAULT_AUDIO_SINK@', 'toggle']).then(() => {
             this._refreshAudio();
         });
@@ -473,6 +502,7 @@ export const MediaPage = GObject.registerClass({
 
     _setAudioVolume(val) {
         this._audioVolume = val;
+        this._lastUserVolumeTime = Date.now();
         if (this._volumeText) this._volumeText.set_text(`${Math.round(val * 100)}%`);
         runAsync(['wpctl', 'set-volume', '@DEFAULT_AUDIO_SINK@', val.toFixed(2)]);
     }
