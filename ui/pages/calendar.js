@@ -70,7 +70,7 @@ function extractMeetingUrl(event) {
     if (event.meetingLink) return event.meetingLink;
     if (event.url && MEETING_URL_RE.test(event.url)) return event.url;
     if (event.link && MEETING_URL_RE.test(event.link)) return event.link;
-    const match = MEETING_URL_RE.exec(event.title || '');
+    const match = MEETING_URL_RE.exec(event.title || '') || MEETING_URL_RE.exec(event.description || '');
     if (match) return match[0];
     return null;
 }
@@ -85,10 +85,17 @@ export const CalendarPage = GObject.registerClass({
             available: true,
         });
 
+        this._edsEvents = [];
         this._buildUi();
 
         this.watch(['calendar', 'events'], () => this._update());
         this._update();
+        this._refreshEds();
+
+        this._edsTimer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 60, () => {
+            this._refreshEds();
+            return GLib.SOURCE_CONTINUE;
+        });
     }
 
     get available() {
@@ -126,7 +133,7 @@ export const CalendarPage = GObject.registerClass({
         header.append(this._dayTitle);
 
         this._todayBtn = pillButton('Today', 'isle-cal-today isle-button-small', () => {
-            this._update();
+            this._refreshEds();
         });
         header.append(this._todayBtn);
 
@@ -180,6 +187,116 @@ export const CalendarPage = GObject.registerClass({
         this.append(container);
     }
 
+    async _refreshEds() {
+        try {
+            print('[Isle Calendar] _refreshEds starting...');
+            const edsEvents = await this._loadEdsEvents();
+            print(`[Isle Calendar] _refreshEds loaded ${edsEvents?.length ?? 0} events: ${JSON.stringify(edsEvents)}`);
+            if (Array.isArray(edsEvents)) {
+                this._edsEvents = edsEvents;
+                this._update();
+            }
+        } catch (e) {
+            print(`[Isle Calendar] _refreshEds ERROR: ${e.message}`);
+        }
+    }
+
+    async _loadEdsEvents() {
+        const bus = Gio.DBus.session;
+        const now = new Date();
+        const pad = n => String(n).padStart(2, '0');
+        const startIso = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}T000000Z`;
+        const tomorrow = new Date(now.getTime() + 24 * 3600 * 1000);
+        const endIso = `${tomorrow.getFullYear()}${pad(tomorrow.getMonth() + 1)}${pad(tomorrow.getDate())}T235959Z`;
+        const query = `(occur-in-time-range? (make-time "${startIso}") (make-time "${endIso}"))`;
+
+        let calList = [];
+        try {
+            const raw = await this.daemon?.call('calendar', 'Calendars');
+            if (raw) calList = JSON.parse(raw);
+        } catch {}
+
+        if (!Array.isArray(calList) || calList.length === 0) {
+            calList = [{ uid: '32ea1ec765133f2ab0ee78d427910954e36dfac4', color: '#7bd148' }];
+        }
+
+        const events = [];
+        const parseTime = str => {
+            if (!str) return null;
+            const m = str.match(/T(\d{2})(\d{2})/);
+            return m ? `${m[1]}:${m[2]}` : null;
+        };
+
+        for (const cal of calList) {
+            try {
+                const openReply = await new Promise((resolve, reject) => {
+                    bus.call(
+                        'org.gnome.evolution.dataserver.Calendar8',
+                        '/org/gnome/evolution/dataserver/CalendarFactory',
+                        'org.gnome.evolution.dataserver.CalendarFactory',
+                        'OpenCalendar',
+                        new GLib.Variant('(s)', [cal.uid]),
+                        null,
+                        Gio.DBusCallFlags.NONE,
+                        4000,
+                        null,
+                        (b, res) => {
+                            try { resolve(b.call_finish(res)); } catch (e) { reject(e); }
+                        }
+                    );
+                });
+                const [calPath, calBusName] = openReply.deep_unpack();
+
+                const listReply = await new Promise((resolve, reject) => {
+                    bus.call(
+                        calBusName,
+                        calPath,
+                        'org.gnome.evolution.dataserver.Calendar',
+                        'GetObjectList',
+                        new GLib.Variant('(s)', [query]),
+                        null,
+                        Gio.DBusCallFlags.NONE,
+                        6000,
+                        null,
+                        (b, res) => {
+                            try { resolve(b.call_finish(res)); } catch (e) { reject(e); }
+                        }
+                    );
+                });
+                const [icsList] = listReply.deep_unpack();
+
+                for (const ics of icsList) {
+                    const summary = ics.match(/^SUMMARY.*?:(.*)$/m)?.[1]?.trim() || 'Untitled';
+                    const dtstart = ics.match(/^DTSTART.*?:(.*)$/m)?.[1]?.trim();
+                    const dtend = ics.match(/^DTEND.*?:(.*)$/m)?.[1]?.trim();
+                    const isAllDay = !dtstart || !dtstart.includes('T');
+                    const start = parseTime(dtstart);
+                    const end = parseTime(dtend);
+                    const descMatch = ics.match(/^DESCRIPTION.*?:(.*)$/m)?.[1] || '';
+                    const locMatch = ics.match(/^LOCATION.*?:(.*)$/m)?.[1] || '';
+                    const urlMatch = ics.match(/^URL.*?:(.*)$/m)?.[1] || '';
+                    const meetingUrl = descMatch.match(MEETING_URL_RE)?.[0]
+                        || locMatch.match(MEETING_URL_RE)?.[0]
+                        || urlMatch.match(MEETING_URL_RE)?.[0]
+                        || null;
+
+                    events.push({
+                        title: summary,
+                        allDay: isAllDay,
+                        start,
+                        end,
+                        color: cal.color || '#0a84ff',
+                        url: meetingUrl,
+                    });
+                }
+            } catch (err) {
+                console.warn(`Isle: could not load EDS events for ${cal.uid}: ${err.message}`);
+            }
+        }
+
+        return events;
+    }
+
     async _add() {
         const text = this._entry.get_text().trim();
         if (!text) return;
@@ -202,17 +319,25 @@ export const CalendarPage = GObject.registerClass({
                 console.warn(`Isle: could not add calendar event: ${e.message}`);
             }
         }
-        this._update();
+        await this._refreshEds();
     }
 
     _events() {
         const raw = this.daemon?.state?.calendar ?? this.daemon?.state?.events;
-        if (Array.isArray(raw)) return raw;
-        if (Array.isArray(raw?.events)) return raw.events;
-        if (Array.isArray(raw?.days)) {
-            return raw.days.flatMap(d => d.events || []);
+        let list = [];
+        if (Array.isArray(raw)) list = [...raw];
+        else if (Array.isArray(raw?.events)) list = [...raw.events];
+        else if (Array.isArray(raw?.days)) {
+            list = raw.days.flatMap(d => d.events || []);
         }
-        return [];
+
+        const combined = [...(this._edsEvents || []), ...list];
+        combined.sort((a, b) => {
+            if (a.allDay && !b.allDay) return -1;
+            if (!a.allDay && b.allDay) return 1;
+            return (a.start || '').localeCompare(b.start || '');
+        });
+        return combined;
     }
 
     _update() {
