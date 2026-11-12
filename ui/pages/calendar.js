@@ -5,6 +5,7 @@
 //! Faithful port of upstream gnome-extension/src/pages/calendar.js.
 //! Manages event listings, quick event creation, and meeting joins.
 
+import Gdk from 'gi://Gdk?version=4.0';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import GObject from 'gi://GObject';
@@ -15,6 +16,33 @@ import { icon, iconButton, label, pillButton } from '../widgets.js';
 import { Page } from '../page.js';
 
 const MEETING_URL_RE = /https?:\/\/(?:[a-zA-Z0-9-]+\.)?(?:meet\.google\.com|zoom\.us|teams\.microsoft\.com|webex\.com)\/[^\s"'>]+/i;
+const GENERAL_URL_RE = /https?:\/\/[^\s"'>\\]+/i;
+
+/**
+ * Extracts meeting URL or general link from an event or ICS fields.
+ */
+function extractEventLink(unfolded = '', summary = '', description = '', location = '') {
+    // 1. Google conference property has highest priority
+    const confMatch = unfolded.match(/X-GOOGLE-CONFERENCE:(https?:\/\/[^\s\r\n]+)/i)?.[1]?.trim();
+    if (confMatch) return { url: confMatch, isMeeting: true };
+
+    // 2. Meeting URLs (Google Meet, Zoom, Teams, Webex)
+    const allText = `${summary || ''} ${location || ''} ${description || ''} ${unfolded}`;
+    const meetMatch = allText.match(MEETING_URL_RE)?.[0];
+    if (meetMatch) return { url: meetMatch, isMeeting: true };
+
+    // 3. Location or explicit URL field if it's a URL
+    if (location && /^https?:\/\//i.test(location.trim())) return { url: location.trim(), isMeeting: false };
+    const urlProp = unfolded.match(/^URL.*?:(.*)$/m)?.[1]?.trim();
+    if (urlProp && /^https?:\/\//i.test(urlProp)) return { url: urlProp, isMeeting: false };
+
+    // 4. Any general link in description or summary (excluding standard footer links)
+    const genMatch = (description || '').match(GENERAL_URL_RE)?.[0];
+    if (genMatch && !genMatch.includes('support.google.com') && !genMatch.includes('tel.meet')) {
+        return { url: genMatch, isMeeting: false };
+    }
+    return { url: null, isMeeting: false };
+}
 
 /**
  * Parses color formats (RGB array, hex string, or fallback) into [r, g, b] in range 0.0 .. 1.0.
@@ -59,20 +87,6 @@ function createColorDot(color = null) {
         cr.fill();
     });
     return area;
-}
-
-/**
- * Extracts a meeting link (Google Meet, Zoom, Teams, Webex) from an event.
- */
-function extractMeetingUrl(event) {
-    if (!event) return null;
-    if (event.meeting_url) return event.meeting_url;
-    if (event.meetingLink) return event.meetingLink;
-    if (event.url && MEETING_URL_RE.test(event.url)) return event.url;
-    if (event.link && MEETING_URL_RE.test(event.link)) return event.link;
-    const match = MEETING_URL_RE.exec(event.title || '') || MEETING_URL_RE.exec(event.description || '');
-    if (match) return match[0];
-    return null;
 }
 
 export const CalendarPage = GObject.registerClass({
@@ -266,19 +280,16 @@ export const CalendarPage = GObject.registerClass({
                 const [icsList] = listReply.deep_unpack();
 
                 for (const ics of icsList) {
-                    const summary = ics.match(/^SUMMARY.*?:(.*)$/m)?.[1]?.trim() || 'Untitled';
-                    const dtstart = ics.match(/^DTSTART.*?:(.*)$/m)?.[1]?.trim();
-                    const dtend = ics.match(/^DTEND.*?:(.*)$/m)?.[1]?.trim();
+                    const unfolded = ics.replace(/\r?\n[ \t]/g, '');
+                    const summary = unfolded.match(/^SUMMARY.*?:(.*)$/m)?.[1]?.trim() || 'Untitled';
+                    const dtstart = unfolded.match(/^DTSTART.*?:(.*)$/m)?.[1]?.trim();
+                    const dtend = unfolded.match(/^DTEND.*?:(.*)$/m)?.[1]?.trim();
                     const isAllDay = !dtstart || !dtstart.includes('T');
                     const start = parseTime(dtstart);
                     const end = parseTime(dtend);
-                    const descMatch = ics.match(/^DESCRIPTION.*?:(.*)$/m)?.[1] || '';
-                    const locMatch = ics.match(/^LOCATION.*?:(.*)$/m)?.[1] || '';
-                    const urlMatch = ics.match(/^URL.*?:(.*)$/m)?.[1] || '';
-                    const meetingUrl = descMatch.match(MEETING_URL_RE)?.[0]
-                        || locMatch.match(MEETING_URL_RE)?.[0]
-                        || urlMatch.match(MEETING_URL_RE)?.[0]
-                        || null;
+                    const descMatch = unfolded.match(/^DESCRIPTION.*?:(.*)$/m)?.[1] || '';
+                    const locMatch = unfolded.match(/^LOCATION.*?:(.*)$/m)?.[1] || '';
+                    const link = extractEventLink(unfolded, summary, descMatch, locMatch);
 
                     events.push({
                         title: summary,
@@ -286,7 +297,8 @@ export const CalendarPage = GObject.registerClass({
                         start,
                         end,
                         color: cal.color || '#0a84ff',
-                        url: meetingUrl,
+                        url: link.url,
+                        isMeeting: link.isMeeting,
                     });
                 }
             } catch (err) {
@@ -403,17 +415,64 @@ export const CalendarPage = GObject.registerClass({
         });
         row.append(timeLbl);
 
-        // Join button (if meeting URL detected)
-        const meetingUrl = extractMeetingUrl(event);
-        if (meetingUrl) {
-            const joinBtn = pillButton('Join', 'isle-button-round isle-button-small isle-meeting-join', () => {
+        // Link Actions: Join/Open button + Copy link button
+        const linkInfo = event.url
+            ? { url: event.url, isMeeting: event.isMeeting }
+            : extractEventLink('', event.title, event.description, event.location);
+
+        if (linkInfo && linkInfo.url) {
+            const actionsBox = new Gtk.Box({
+                orientation: Gtk.Orientation.HORIZONTAL,
+                spacing: 6,
+                valign: Gtk.Align.CENTER,
+            });
+
+            // 1. Join / Open button
+            const btnText = linkInfo.isMeeting ? 'Join' : 'Open';
+            const btnClass = linkInfo.isMeeting
+                ? 'isle-pill-accent isle-meeting-join isle-pill-small'
+                : 'isle-pill-small';
+
+            const actionBtn = pillButton(btnText, btnClass, () => {
                 try {
-                    Gio.AppInfo.launch_default_for_uri_async(meetingUrl, null, null, null);
+                    Gio.AppInfo.launch_default_for_uri_async(linkInfo.url, null, null, null);
                 } catch (e) {
-                    console.warn(`Isle: could not open meeting URL: ${e.message}`);
+                    console.warn(`Isle: could not open URL: ${e.message}`);
                 }
             });
-            row.append(joinBtn);
+            actionsBox.append(actionBtn);
+
+            // 2. Copy Link button
+            const copyImg = new Gtk.Image({
+                icon_name: 'edit-copy-symbolic',
+                pixel_size: 11,
+            });
+            const copyBtn = new Gtk.Button({
+                child: copyImg,
+                css_classes: ['isle-button', 'isle-button-round', 'isle-button-small'],
+                tooltip_text: 'Copy link',
+                valign: Gtk.Align.CENTER,
+            });
+            copyBtn.connect('clicked', () => {
+                try {
+                    const display = Gdk.Display.get_default();
+                    if (display) display.get_clipboard().set(linkInfo.url);
+                } catch (_) {}
+                try {
+                    GLib.spawn_command_line_async(`bash -c 'printf %s "${linkInfo.url}" | xclip -selection clipboard'`);
+                } catch (_) {}
+
+                copyImg.set_from_icon_name('object-select-symbolic');
+                copyBtn.set_tooltip_text('Copied!');
+                GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1500, () => {
+                    copyImg.set_from_icon_name('edit-copy-symbolic');
+                    copyBtn.set_tooltip_text('Copy link');
+                    return GLib.SOURCE_REMOVE;
+                });
+            });
+            actionsBox.append(copyBtn);
+
+            row.append(actionsBox);
         }
 
         // Remove button (if Isle event with id)
