@@ -406,8 +406,11 @@ export class Daemon extends EventEmitter {
 
     _attempt(name, method, args, quiet) {
         const proxy = this._proxies[name];
-        if (!proxy)
+        if (!proxy) {
+            print(`[Isle daemon _attempt] ERROR: No proxy found for ${name}`);
             return Promise.resolve({ result: null, error: null });
+        }
+        print(`[Isle daemon _attempt] Calling ${name}.${method} with ${args.length} args:`, JSON.stringify(args));
         return new Promise(resolve => {
             try {
                 proxy[`${method}Remote`](...args, (result, error) => {
@@ -415,6 +418,11 @@ export class Daemon extends EventEmitter {
                     if (this._destroyed) {
                         resolve({ result: null, error: null });
                         return;
+                    }
+                    if (error) {
+                        print(`[Isle daemon _attempt] ${name}.${method} FAILED: ${error.message}`);
+                    } else {
+                        print(`[Isle daemon _attempt] ${name}.${method} SUCCEEDED`);
                     }
                     if (error && !quiet)
                         console.warn(`Isle: ${method} failed: ${error.message}`);

@@ -350,12 +350,15 @@ export const AssistantView = GObject.registerClass({
 
         // 3. Process prompt: if connected to isled D-Bus daemon, delegate to daemon Ask
         const daemonConnected = Boolean(this._daemon && this._daemon._proxies['assistant'] && this._daemon.running);
+        print(`[Isle Assistant _submit] daemonConnected=${daemonConnected} running=${this._daemon?.running} proxy=${Boolean(this._daemon?._proxies?.['assistant'])}`);
         if (daemonConnected) {
             const context = JSON.stringify({
                 provider: 'nim',
                 nim_model: 'nvidia/nemotron-3.5-super-vl-120b-a12b',
             });
-            this._daemon.call('assistant', 'Ask', text, context).catch(err => {
+            this._daemon.call('assistant', 'Ask', text, context).then(() => {
+                print('[Isle Assistant _submit] Ask call completed');
+            }).catch(err => {
                 console.warn(`Isle: Assistant Ask D-Bus call failed: ${err.message}`);
                 this._face.setForm('confused');
                 this._statusLabel.set_text(err.message || 'Error contacting daemon');
