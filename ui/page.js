@@ -15,6 +15,7 @@ export const Page = GObject.registerClass({
     Signals: {
         'request-keyboard': { param_types: [GObject.TYPE_BOOLEAN] },
         'width-changed': {},
+        'height-changed': {},
         'tint-changed': {},
         'tint-motion': { param_types: [GObject.TYPE_DOUBLE, GObject.TYPE_DOUBLE] },
         'request-close': {},
