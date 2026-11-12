@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 zickrian
 
-//! Now Playing, Lyrics, and Audio Outputs page for Isle XFCE GTK4 runtime.
-//! Faithful port of upstream gnome-extension/src/pages/media.js.
+//! Dynamic Now Playing, Volume, and Lyrics page for Isle XFCE GTK4 runtime.
+//! Supports collapsible tiles with dynamic spring height adaptation.
 
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
@@ -45,15 +45,16 @@ export const MediaPage = GObject.registerClass({
             height,
         });
 
-        this._mode = 'player'; // 'player', 'lyrics', or 'audio'
+        this._showVolume = false;
+        this._showLyrics = false;
         this._audioVolume = 0.5;
         this._audioMuted = false;
         this._lastLyricsKey = null;
         this._lyricLineWidgets = [];
         this._lastActiveLineIdx = -1;
 
-        // Player view widgets
-        this._playerBox = null;
+        // Player tile widgets
+        this._mainBox = null;
         this._emptyBox = null;
         this._art = null;
         this._title = null;
@@ -67,22 +68,15 @@ export const MediaPage = GObject.registerClass({
         this._lyricsBtn = null;
         this._outputBtn = null;
 
-        // Audio view widgets
-        this._audioBox = null;
-        this._audioSlider = null;
-        this._audioVolumeText = null;
-        this._audioMuteBtn = null;
-        this._outputList = null;
+        // Volume tile widgets
+        this._volumeRevealer = null;
+        this._volumeSlider = null;
+        this._volumeText = null;
+        this._volumeMuteBtn = null;
+        this._chipsBox = null;
 
-        // Lyrics view widgets
-        this._lyricsBox = null;
-        this._lyricsArt = null;
-        this._lyricsTitle = null;
-        this._lyricsArtist = null;
-        this._lyricsElapsed = null;
-        this._lyricsRemaining = null;
-        this._lyricsScrubber = null;
-        this._lyricsPlayBtn = null;
+        // Lyrics tile widgets
+        this._lyricsRevealer = null;
         this._lyricsScroll = null;
         this._lyricsColumn = null;
 
@@ -91,6 +85,13 @@ export const MediaPage = GObject.registerClass({
         this.watch(['nowPlaying', 'lyrics', 'players'], () => this._update());
         this._update();
         this._refreshAudio();
+    }
+
+    getDesiredHeight() {
+        let h = 195;
+        if (this._showVolume) h += 65;
+        if (this._showLyrics) h += 135;
+        return h;
     }
 
     _buildUi() {
@@ -110,40 +111,62 @@ export const MediaPage = GObject.registerClass({
         });
         this._stack.add_named(this._emptyBox, 'empty');
 
-        // 2. Standard Player view
-        this._playerBox = this._buildPlayer();
-        this._stack.add_named(this._playerBox, 'player');
+        // 2. Dynamic content container with stacked tiles
+        this._mainBox = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 6,
+            hexpand: true,
+            vexpand: true,
+            valign: Gtk.Align.START,
+            css_classes: ['isle-media-container'],
+        });
 
-        // 3. Audio & Volume view
-        this._audioBox = this._buildAudio();
-        this._stack.add_named(this._audioBox, 'audio');
+        // ── Tile 1: Music Player Tile (Top) ─────────────────────────────
+        const playerTile = this._buildPlayerTile();
+        this._mainBox.append(playerTile);
 
-        // 4. Synced Lyrics view
-        this._lyricsBox = this._buildLyrics();
-        this._stack.add_named(this._lyricsBox, 'lyrics');
+        // ── Tile 2: Volume & Output Tile (Middle) ───────────────────────
+        this._volumeRevealer = new Gtk.Revealer({
+            transition_type: Gtk.RevealerTransitionType.SLIDE_DOWN,
+            transition_duration: 200,
+            reveal_child: false,
+        });
+        const volumeTile = this._buildVolumeTile();
+        this._volumeRevealer.set_child(volumeTile);
+        this._mainBox.append(this._volumeRevealer);
 
+        // ── Tile 3: Synced Lyrics Tile (Bottom) ─────────────────────────
+        this._lyricsRevealer = new Gtk.Revealer({
+            transition_type: Gtk.RevealerTransitionType.SLIDE_DOWN,
+            transition_duration: 200,
+            reveal_child: false,
+        });
+        const lyricsTile = this._buildLyricsTile();
+        this._lyricsRevealer.set_child(lyricsTile);
+        this._mainBox.append(this._lyricsRevealer);
+
+        this._stack.add_named(this._mainBox, 'player');
         this.append(this._stack);
     }
 
-    _buildPlayer() {
+    _buildPlayerTile() {
         const row = new Gtk.Box({
             orientation: Gtk.Orientation.HORIZONTAL,
             spacing: 16,
             hexpand: true,
-            vexpand: true,
             valign: Gtk.Align.CENTER,
             halign: Gtk.Align.FILL,
             css_classes: ['isle-player'],
         });
 
-        // Album Art
+        // Album Art (104x104)
         this._art = new Art({ size: ART_SIZE, radius: 16 });
         const click = new Gtk.GestureClick();
         click.connect('released', () => this.daemon.call('media', 'Raise'));
         this._art.add_controller(click);
         row.append(this._art);
 
-        // Right column: head, progress, controls
+        // Controls column
         const col = new Gtk.Box({
             orientation: Gtk.Orientation.VERTICAL,
             spacing: 6,
@@ -152,7 +175,7 @@ export const MediaPage = GObject.registerClass({
             css_classes: ['isle-player-column'],
         });
 
-        // Head: Title & Artist
+        // Head: Title, Subtitle, Mode Buttons
         const head = new Gtk.Box({
             orientation: Gtk.Orientation.HORIZONTAL,
             hexpand: true,
@@ -179,7 +202,7 @@ export const MediaPage = GObject.registerClass({
         texts.append(this._artist);
         head.append(texts);
 
-        // Right mode icons (lyrics & volume/output)
+        // Right mode toggle buttons
         const modes = new Gtk.Box({
             orientation: Gtk.Orientation.HORIZONTAL,
             spacing: 4,
@@ -188,23 +211,23 @@ export const MediaPage = GObject.registerClass({
             css_classes: ['isle-player-modes'],
         });
         this._lyricsBtn = iconButton('isle-lyrics', 'isle-button-flat isle-mode-toggle', () => {
-            this._toggleMode('lyrics');
+            this._toggleLyrics();
         }, {
             size: 16,
-            accessibleName: 'Show lyrics',
+            accessibleName: 'Toggle lyrics',
         });
         this._outputBtn = iconButton('isle-output', 'isle-button-flat isle-mode-toggle', () => {
-            this._toggleMode('audio');
+            this._toggleVolume();
         }, {
             size: 16,
-            accessibleName: 'Volume and output',
+            accessibleName: 'Toggle volume and output',
         });
         modes.append(this._lyricsBtn);
         modes.append(this._outputBtn);
         head.append(modes);
         col.append(head);
 
-        // Progress row: Elapsed, Scrubber, Remaining
+        // Progress row
         const progress = new Gtk.Box({
             orientation: Gtk.Orientation.HORIZONTAL,
             spacing: 8,
@@ -257,202 +280,118 @@ export const MediaPage = GObject.registerClass({
         return row;
     }
 
-    _buildAudio() {
+    _buildVolumeTile() {
         const box = new Gtk.Box({
             orientation: Gtk.Orientation.VERTICAL,
-            spacing: 10,
+            spacing: 6,
             hexpand: true,
-            vexpand: true,
-            valign: Gtk.Align.FILL,
-            css_classes: ['isle-audio-layout'],
+            css_classes: ['isle-volume-tile'],
         });
 
-        // Top volume row
-        const volumeRow = new Gtk.Box({
+        // Top row: Mute button, Volume slider, Volume percent text
+        const topRow = new Gtk.Box({
             orientation: Gtk.Orientation.HORIZONTAL,
             spacing: 8,
             hexpand: true,
             valign: Gtk.Align.CENTER,
-            css_classes: ['isle-volume-row'],
         });
 
-        this._audioMuteBtn = iconButton('audio-volume-high-symbolic', 'isle-button-flat', () => {
+        this._volumeMuteBtn = iconButton('audio-volume-high-symbolic', 'isle-button-flat', () => {
             this._toggleAudioMute();
-        }, { size: 18, accessibleName: 'Mute' });
+        }, { size: 16, accessibleName: 'Mute' });
 
-        this._audioSlider = new Slider({ scrollStep: 0.05 });
-        this._audioSlider.connect('value-changed', (_slider, val) => {
+        this._volumeSlider = new Slider({ scrollStep: 0.05 });
+        this._volumeSlider.connect('value-changed', (_slider, val) => {
             this._setAudioVolume(val);
         });
 
-        this._audioVolumeText = label('50%', 'isle-volume-text');
+        this._volumeText = label('50%', 'isle-volume-text');
 
-        const backBtn = iconButton('isle-output-fill', 'isle-button-flat isle-mode-toggle on', () => {
-            this._toggleMode('audio');
-        }, { size: 16, accessibleName: 'Back to player' });
+        topRow.append(this._volumeMuteBtn);
+        topRow.append(this._volumeSlider);
+        topRow.append(this._volumeText);
+        box.append(topRow);
 
-        volumeRow.append(this._audioMuteBtn);
-        volumeRow.append(this._audioSlider);
-        volumeRow.append(this._audioVolumeText);
-        volumeRow.append(backBtn);
-        box.append(volumeRow);
-
-        // Output sink list
-        const scroll = new Gtk.ScrolledWindow({
-            hscrollbar_policy: Gtk.PolicyType.NEVER,
-            vscrollbar_policy: Gtk.PolicyType.AUTOMATIC,
+        // Bottom row: Sinks chips selector
+        this._chipsBox = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 6,
             hexpand: true,
-            vexpand: true,
+            valign: Gtk.Align.CENTER,
         });
-
-        this._outputList = new Gtk.Box({
-            orientation: Gtk.Orientation.VERTICAL,
-            spacing: 4,
-            hexpand: true,
-            css_classes: ['isle-output-list'],
-        });
-        scroll.set_child(this._outputList);
-        box.append(scroll);
+        box.append(this._chipsBox);
 
         return box;
     }
 
-    _buildLyrics() {
-        const layout = new Gtk.Box({
-            orientation: Gtk.Orientation.HORIZONTAL,
-            spacing: 20,
-            hexpand: true,
-            vexpand: true,
-            valign: Gtk.Align.FILL,
-            css_classes: ['isle-lyrics-layout'],
-        });
-
-        // Left side: 64x64 art, title, artist, progress, controls, mode buttons
-        const side = new Gtk.Box({
+    _buildLyricsTile() {
+        const box = new Gtk.Box({
             orientation: Gtk.Orientation.VERTICAL,
-            spacing: 8,
-            valign: Gtk.Align.CENTER,
-            css_classes: ['isle-lyrics-side'],
-        });
-        side.set_size_request(220, -1);
-
-        const top = new Gtk.Box({
-            orientation: Gtk.Orientation.HORIZONTAL,
-            spacing: 12,
-            css_classes: ['isle-player-top'],
-        });
-        this._lyricsArt = new Art({ size: 64, radius: 12 });
-        top.append(this._lyricsArt);
-
-        const texts = new Gtk.Box({
-            orientation: Gtk.Orientation.VERTICAL,
-            spacing: 2,
+            spacing: 4,
             hexpand: true,
-            valign: Gtk.Align.CENTER,
-            css_classes: ['isle-player-texts'],
+            css_classes: ['isle-lyrics-tile'],
         });
-        this._lyricsTitle = label('', 'isle-side-title');
-        this._lyricsTitle.set_ellipsize(Pango.EllipsizeMode.END);
-        this._lyricsTitle.set_halign(Gtk.Align.START);
-        this._lyricsArtist = label('', 'isle-side-artist');
-        this._lyricsArtist.set_ellipsize(Pango.EllipsizeMode.END);
-        this._lyricsArtist.set_halign(Gtk.Align.START);
-        texts.append(this._lyricsTitle);
-        texts.append(this._lyricsArtist);
-        top.append(texts);
-        side.append(top);
 
-        // Progress row on lyrics side
-        const progress = new Gtk.Box({
-            orientation: Gtk.Orientation.HORIZONTAL,
-            spacing: 6,
-            hexpand: true,
-            css_classes: ['isle-player-progress'],
-        });
-        this._lyricsElapsed = label('0:00', 'isle-time');
-        this._lyricsRemaining = label('−0:00', 'isle-time isle-time-end');
-        this._lyricsScrubber = new Slider();
-        this._lyricsScrubber.connect('released', (_slider, fraction) => {
-            const length = this.daemon.state.nowPlaying?.length_us ?? 0;
-            if (length > 0)
-                this.daemon.call('media', 'SetPosition', Math.round(fraction * length));
-        });
-        progress.append(this._lyricsElapsed);
-        progress.append(this._lyricsScrubber);
-        progress.append(this._lyricsRemaining);
-        side.append(progress);
-
-        // Controls row
-        const controls = new Gtk.Box({
-            orientation: Gtk.Orientation.HORIZONTAL,
-            spacing: 6,
-            valign: Gtk.Align.CENTER,
-            css_classes: ['isle-lyrics-controls'],
-        });
-        const lyricsBack = iconButton('isle-lyrics-fill', 'isle-button-flat isle-mode-toggle on', () => {
-            this._toggleMode('lyrics');
-        }, { size: 16, accessibleName: 'Hide lyrics' });
-
-        const transport = new Gtk.Box({
-            orientation: Gtk.Orientation.HORIZONTAL,
-            spacing: 8,
-            hexpand: true,
-            halign: Gtk.Align.CENTER,
-            css_classes: ['isle-transport'],
-        });
-        const prev = iconButton('isle-backward-symbolic', 'isle-button-flat', () => {
-            this.daemon.call('media', 'Previous');
-        }, { size: 16, accessibleName: 'Previous' });
-        this._lyricsPlayBtn = iconButton('isle-play-symbolic', 'isle-button-flat isle-play', () => {
-            this.daemon.call('media', 'PlayPause');
-        }, { size: 18, accessibleName: 'Play or pause' });
-        const next = iconButton('isle-forward-symbolic', 'isle-button-flat', () => {
-            this.daemon.call('media', 'Next');
-        }, { size: 16, accessibleName: 'Next' });
-        transport.append(prev);
-        transport.append(this._lyricsPlayBtn);
-        transport.append(next);
-
-        const audioFromLyrics = iconButton('isle-output', 'isle-button-flat isle-mode-toggle', () => {
-            this._toggleMode('audio');
-        }, { size: 16, accessibleName: 'Volume and output' });
-
-        controls.append(lyricsBack);
-        controls.append(transport);
-        controls.append(audioFromLyrics);
-        side.append(controls);
-        layout.append(side);
-
-        // Right side: Lyrics scroll view
         this._lyricsScroll = new Gtk.ScrolledWindow({
             hscrollbar_policy: Gtk.PolicyType.NEVER,
             vscrollbar_policy: Gtk.PolicyType.AUTOMATIC,
             hexpand: true,
             vexpand: true,
-            css_classes: ['isle-lyrics-scroll'],
         });
+
         this._lyricsColumn = new Gtk.Box({
             orientation: Gtk.Orientation.VERTICAL,
-            spacing: 12,
+            spacing: 8,
             hexpand: true,
             valign: Gtk.Align.START,
             css_classes: ['isle-lyrics-column'],
         });
         this._lyricsScroll.set_child(this._lyricsColumn);
-        layout.append(this._lyricsScroll);
+        box.append(this._lyricsScroll);
 
-        return layout;
+        return box;
     }
 
-    _toggleMode(mode) {
-        this._mode = this._mode === mode ? 'player' : mode;
-        if (this._mode === 'audio') {
+    _toggleVolume() {
+        this._showVolume = !this._showVolume;
+        if (this._showVolume) {
             this._refreshAudio();
         }
-        if (this._mode === 'lyrics') {
+        this._syncModeState();
+    }
+
+    _toggleLyrics() {
+        this._showLyrics = !this._showLyrics;
+        if (this._showLyrics) {
             this.daemon.call('media', 'SetLyrics', true);
         }
-        this._update();
+        this._syncModeState();
+    }
+
+    _syncModeState() {
+        if (this._outputBtn) {
+            if (this._showVolume) {
+                this._outputBtn.add_css_class('on');
+                setButtonIcon(this._outputBtn, 'isle-output-fill');
+            } else {
+                this._outputBtn.remove_css_class('on');
+                setButtonIcon(this._outputBtn, 'isle-output');
+            }
+        }
+        if (this._lyricsBtn) {
+            if (this._showLyrics) {
+                this._lyricsBtn.add_css_class('on');
+                setButtonIcon(this._lyricsBtn, 'isle-lyrics-fill');
+            } else {
+                this._lyricsBtn.remove_css_class('on');
+                setButtonIcon(this._lyricsBtn, 'isle-lyrics');
+            }
+        }
+
+        this._volumeRevealer.set_reveal_child(this._showVolume);
+        this._lyricsRevealer.set_reveal_child(this._showLyrics);
+
+        this.emit('height-changed');
     }
 
     async _refreshAudio() {
@@ -463,11 +402,11 @@ export const MediaPage = GObject.registerClass({
         this._audioVolume = vol;
         this._audioMuted = isMuted;
 
-        if (this._audioSlider) this._audioSlider.value = vol;
-        if (this._audioVolumeText) this._audioVolumeText.set_text(`${Math.round(vol * 100)}%`);
-        if (this._audioMuteBtn) {
+        if (this._volumeSlider) this._volumeSlider.value = vol;
+        if (this._volumeText) this._volumeText.set_text(`${Math.round(vol * 100)}%`);
+        if (this._volumeMuteBtn) {
             const iconName = isMuted ? 'audio-volume-muted' : (vol > 0.5 ? 'audio-volume-high-symbolic' : 'audio-volume-medium-symbolic');
-            setButtonIcon(this._audioMuteBtn, iconName);
+            setButtonIcon(this._volumeMuteBtn, iconName);
         }
 
         this._refreshAudioOutputs();
@@ -475,10 +414,10 @@ export const MediaPage = GObject.registerClass({
 
     async _refreshAudioOutputs() {
         const stdout = await runAsync(['wpctl', 'status']);
-        if (!stdout || !this._outputList) return;
+        if (!stdout || !this._chipsBox) return;
 
-        while (this._outputList.get_first_child()) {
-            this._outputList.remove(this._outputList.get_first_child());
+        while (this._chipsBox.get_first_child()) {
+            this._chipsBox.remove(this._chipsBox.get_first_child());
         }
 
         const lines = stdout.split('\n');
@@ -497,39 +436,22 @@ export const MediaPage = GObject.registerClass({
                     const isDefault = match[1].includes('*');
                     const id = match[2];
                     const name = match[3].trim();
+                    const shortName = name.replace(/^Ryzen HD Audio Controller\s*/i, '').trim();
 
-                    const btn = new Gtk.Button({
-                        css_classes: ['isle-output-button', isDefault ? 'active' : 'idle'],
-                        hexpand: true,
+                    const chip = new Gtk.Button({
+                        css_classes: ['isle-output-chip', isDefault ? 'active' : 'idle'],
                     });
-                    const row = new Gtk.Box({
+                    const chipRow = new Gtk.Box({
                         orientation: Gtk.Orientation.HORIZONTAL,
-                        spacing: 10,
-                        hexpand: true,
+                        spacing: 6,
                         valign: Gtk.Align.CENTER,
-                        css_classes: ['isle-output-row'],
                     });
                     const iconName = name.toLowerCase().includes('headphone') ? 'isle-headphones-symbolic' : 'isle-speaker-device-symbolic';
-                    const devIcon = new Gtk.Image({
-                        gicon: icon(iconName),
-                        pixel_size: 16,
-                    });
-                    const devLbl = label(name, 'isle-output-name');
-                    devLbl.set_hexpand(true);
-                    devLbl.set_halign(Gtk.Align.START);
-                    devLbl.set_ellipsize(Pango.EllipsizeMode.END);
+                    chipRow.append(new Gtk.Image({ gicon: icon(iconName), pixel_size: 13 }));
+                    chipRow.append(label(shortName || name, ''));
+                    chip.set_child(chipRow);
 
-                    row.append(devIcon);
-                    row.append(devLbl);
-                    if (isDefault) {
-                        const checkImg = new Gtk.Image({
-                            gicon: icon('isle-check-symbolic'),
-                            pixel_size: 14,
-                        });
-                        row.append(checkImg);
-                    }
-                    btn.set_child(row);
-                    btn.connect('clicked', () => {
+                    chip.connect('clicked', () => {
                         runAsync(['wpctl', 'set-default', id]).then(() => {
                             GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
                                 this._refreshAudio();
@@ -537,7 +459,7 @@ export const MediaPage = GObject.registerClass({
                             });
                         });
                     });
-                    this._outputList.append(btn);
+                    this._chipsBox.append(chip);
                 }
             }
         }
@@ -551,7 +473,7 @@ export const MediaPage = GObject.registerClass({
 
     _setAudioVolume(val) {
         this._audioVolume = val;
-        if (this._audioVolumeText) this._audioVolumeText.set_text(`${Math.round(val * 100)}%`);
+        if (this._volumeText) this._volumeText.set_text(`${Math.round(val * 100)}%`);
         runAsync(['wpctl', 'set-volume', '@DEFAULT_AUDIO_SINK@', val.toFixed(2)]);
     }
 
@@ -569,27 +491,20 @@ export const MediaPage = GObject.registerClass({
             return;
         }
 
-        // Switch to the active view mode
-        this._stack.set_visible_child_name(this._mode);
+        this._stack.set_visible_child_name('player');
 
-        // Update standard Player view metadata
+        // Set metadata
         this._title.set_text(nowPlaying.title || 'Unknown');
         this._artist.set_text(nowPlaying.artist || nowPlaying.album || 'Unknown Artist');
         this._art.setPath(nowPlaying.art_path || null);
 
-        // Update Lyrics view metadata
-        this._lyricsTitle.set_text(nowPlaying.title || 'Unknown');
-        this._lyricsArtist.set_text(nowPlaying.artist || nowPlaying.album || 'Unknown Artist');
-        this._lyricsArt.setPath(nowPlaying.art_path || null);
-
-        // Update Play/Pause button icons
+        // Transport button state
         const playing = Playback.isPlaying(nowPlaying);
         const playIcon = playing ? 'isle-pause-symbolic' : 'isle-play-symbolic';
         setButtonIcon(this._playButton, playIcon);
-        setButtonIcon(this._lyricsPlayBtn, playIcon);
 
         this._syncProgress();
-        if (this._mode === 'lyrics') {
+        if (this._showLyrics) {
             this._syncLyrics();
         }
 
@@ -604,7 +519,7 @@ export const MediaPage = GObject.registerClass({
         const nowPlaying = this.daemon?.state?.nowPlaying;
         if (Playback.isPlaying(nowPlaying)) {
             this._syncProgress();
-            if (this._mode === 'lyrics') {
+            if (this._showLyrics) {
                 this._syncLyrics();
             }
             this.later('progress', PROGRESS_REFRESH_MS, () => this._updateProgressLoop(), { keep: true });
@@ -618,22 +533,13 @@ export const MediaPage = GObject.registerClass({
         const posMs = Playback.positionMs(nowPlaying);
         const lenMs = Playback.lengthMs(nowPlaying);
 
-        const elapsedStr = Format.duration(posMs);
-        this._elapsed.set_text(elapsedStr);
-        this._lyricsElapsed.set_text(elapsedStr);
-
+        this._elapsed.set_text(Format.duration(posMs));
         if (lenMs > 0) {
-            const remStr = `−${Format.duration(Math.max(0, lenMs - posMs))}`;
-            this._remaining.set_text(remStr);
-            this._lyricsRemaining.set_text(remStr);
-            const frac = Math.min(1, Math.max(0, posMs / lenMs));
-            this._scrubber.value = frac;
-            this._lyricsScrubber.value = frac;
+            this._remaining.set_text(`−${Format.duration(Math.max(0, lenMs - posMs))}`);
+            this._scrubber.value = Math.min(1, Math.max(0, posMs / lenMs));
         } else {
             this._remaining.set_text('');
-            this._lyricsRemaining.set_text('');
             this._scrubber.value = 0;
-            this._lyricsScrubber.value = 0;
         }
     }
 
@@ -663,7 +569,7 @@ export const MediaPage = GObject.registerClass({
                     hexpand: true,
                 });
                 const iconName = status === 'instrumental' ? 'isle-music' : 'isle-lyrics';
-                const img = new Gtk.Image({ gicon: icon(iconName), pixel_size: 24 });
+                const img = new Gtk.Image({ gicon: icon(iconName), pixel_size: 20 });
                 const titleText = status === 'instrumental'
                     ? 'Instrumental'
                     : (status === 'loading' ? 'Looking for lyrics...' : 'No lyrics for this song');
@@ -726,7 +632,7 @@ export const MediaPage = GObject.registerClass({
                 if (adj && activeWidget.get_parent()) {
                     const alloc = activeWidget.get_allocation();
                     if (alloc.y > 0) {
-                        adj.set_value(Math.max(0, alloc.y - 80));
+                        adj.set_value(Math.max(0, alloc.y - 40));
                     }
                 }
             }

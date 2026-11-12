@@ -434,6 +434,18 @@ impl FloatingWindow {
         Ok(floating)
     }
 
+    /// Resolves dynamic expanded height from window CSS classes (e.g. `isle-h-195`), defaulting to 300px.
+    pub fn custom_expanded_height(window: &gtk::Window) -> f64 {
+        for class in window.css_classes() {
+            if let Some(h_str) = class.strip_prefix("isle-h-") {
+                if let Ok(val) = h_str.parse::<f64>() {
+                    return val;
+                }
+            }
+        }
+        STANDARD_EXPANDED_HEIGHT
+    }
+
     /// Returns current spring values (width, height, radius, shoulder).
     pub fn current_geometry(&self) -> (f64, f64, f64, f64) {
         let w = self.0.width_spring.get().value;
@@ -490,7 +502,7 @@ impl FloatingWindow {
             } else {
                 (
                     STANDARD_EXPANDED_WIDTH,
-                    STANDARD_EXPANDED_HEIGHT,
+                    Self::custom_expanded_height(&self.0.window),
                     EXPANDED_RADIUS,
                     EXPANDED_SHOULDER,
                 )
@@ -553,7 +565,11 @@ impl FloatingWindow {
             if is_expanded {
                 let is_asst = inner.window.has_css_class("isle-mode-assistant");
                 let target_w = if is_asst { ASSISTANT_EXPANDED_WIDTH } else { STANDARD_EXPANDED_WIDTH };
-                let target_h = if is_asst { ASSISTANT_EXPANDED_HEIGHT } else { STANDARD_EXPANDED_HEIGHT };
+                let target_h = if is_asst {
+                    ASSISTANT_EXPANDED_HEIGHT
+                } else {
+                    Self::custom_expanded_height(&inner.window)
+                };
                 if (w.target - target_w).abs() > 0.1 || (h.target - target_h).abs() > 0.1 {
                     w.set_target(target_w);
                     h.set_target(target_h);
@@ -579,12 +595,12 @@ impl FloatingWindow {
                 inner.last_tick.set(None);
                 let target_str = if inner.is_expanded.get() {
                     if inner.window.has_css_class("isle-mode-assistant") {
-                        "ASSISTANT_EXPANDED (640x380)"
+                        format!("ASSISTANT_EXPANDED ({:.0}x{:.0})", ASSISTANT_EXPANDED_WIDTH, ASSISTANT_EXPANDED_HEIGHT)
                     } else {
-                        "STANDARD_EXPANDED (600x300)"
+                        format!("EXPANDED ({:.0}x{:.0})", STANDARD_EXPANDED_WIDTH, Self::custom_expanded_height(&inner.window))
                     }
                 } else {
-                    "COMPACT (240x38)"
+                    "COMPACT (240x38)".to_string()
                 };
                 info!(
                     "[ANIMATION] Spring settled at ({:.1}x{:.1}) | target={target_str}",

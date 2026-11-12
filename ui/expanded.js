@@ -112,6 +112,9 @@ export const ExpandedView = GObject.registerClass({
             page.connect('width-changed', () => {
                 if (page === this.page) this._syncWidth();
             });
+            page.connect('height-changed', () => {
+                if (page === this.page) this._syncHeight();
+            });
             page.connect('tint-changed', () => {
                 if (page === this.page) this.emit('tint-changed');
             });
@@ -123,6 +126,7 @@ export const ExpandedView = GObject.registerClass({
         this._syncTabs();
         this._tickClock();
         this._updateHeader();
+        this._syncHeight();
     }
 
     _buildHeader() {
@@ -400,6 +404,7 @@ export const ExpandedView = GObject.registerClass({
             if (win && win.add_css_class) {
                 win.add_css_class('isle-mode-assistant');
             }
+            this._syncHeight();
             this.focusAssistantEntry();
         } else {
             this._contentStack.set_visible_child_name('pager');
@@ -407,6 +412,7 @@ export const ExpandedView = GObject.registerClass({
             if (win && win.remove_css_class) {
                 win.remove_css_class('isle-mode-assistant');
             }
+            this._syncHeight();
         }
     }
 
@@ -480,6 +486,7 @@ export const ExpandedView = GObject.registerClass({
 
         this._syncTabs();
         this._updateHeader();
+        this._syncHeight();
         this.emit('tint-changed');
         this.emit('page-changed');
 
@@ -540,11 +547,36 @@ export const ExpandedView = GObject.registerClass({
     _onAvailabilityChanged(page) {
         this._syncTabs();
         this._updateHeader();
+        this._syncHeight();
         if (page !== this.page || page.available) return;
         const index = this._nearestAvailable(this._index, 1) ?? this._nearestAvailable(this._index, -1);
         if (index !== null) {
             this.showPage(index);
         }
+    }
+
+    _syncHeight() {
+        const win = this.get_root() || Gtk.Application.get_default()?.get_active_window();
+        if (!win || !win.get_css_classes) return;
+
+        let targetH = 300;
+        if (this._assistantActive) {
+            targetH = 380;
+        } else if (this.page && typeof this.page.getDesiredHeight === 'function') {
+            targetH = this.page.getDesiredHeight();
+        } else if (this.page?.name === 'music' || this.page?.name === 'focus') {
+            targetH = 195;
+        } else if (this.page?.name === 'shelf' || this.page?.name === 'usage') {
+            targetH = 240;
+        }
+
+        const classes = win.get_css_classes();
+        for (const cls of classes) {
+            if (cls.startsWith('isle-h-')) {
+                win.remove_css_class(cls);
+            }
+        }
+        win.add_css_class(`isle-h-${targetH}`);
     }
 
     setActive(active) {
