@@ -119,6 +119,7 @@ export class NotificationCenter extends EventEmitter {
                 ]]));
             } else if (methodName === 'Notify') {
                 const [appName, replacesId, appIcon, summary, body, actions, hints, expireTimeout] = parameters.deep_unpack();
+                print(`[Isle DBus Notify] app=${appName} replacesId=${replacesId} summary="${summary}" body="${body}"`);
                 const id = this._onNotify(appName, replacesId, appIcon, summary, body, actions, hints, expireTimeout);
                 invocation.return_value(new GLib.Variant('(u)', [id]));
             } else if (methodName === 'CloseNotification') {
@@ -136,6 +137,19 @@ export class NotificationCenter extends EventEmitter {
         const id = (replacesId && replacesId > 0 && this._notifications.has(replacesId))
             ? replacesId
             : this._nextId++;
+
+        // Clean web.whatsapp.com domain clutter and detect WhatsApp
+        let cleanBody = body || '';
+        let cleanAppName = appName || 'Notification';
+        let cleanAppIcon = appIcon || '';
+
+        if (cleanBody.includes('web.whatsapp.com') || cleanAppName.toLowerCase().includes('whatsapp')) {
+            cleanAppName = 'WhatsApp';
+            if (!cleanAppIcon || cleanAppIcon === 'dialog-information-symbolic') {
+                cleanAppIcon = 'whatsapp';
+            }
+            cleanBody = cleanBody.replace(/^web\.whatsapp\.com\s*/i, '').replace(/\bweb\.whatsapp\.com\b\s*/gi, '').trim();
+        }
 
         // Parse action pairs: [id1, label1, id2, label2, ...]
         const parsedActions = [];
@@ -156,11 +170,11 @@ export class NotificationCenter extends EventEmitter {
         const isUpdate = this._notifications.has(id);
         const notification = {
             id,
-            appName: appName || 'Notification',
-            title: summary || appName || '',
-            body: plainBody(body || ''),
+            appName: cleanAppName,
+            title: summary || cleanAppName || '',
+            body: plainBody(cleanBody),
             rawBody: body || '',
-            appIcon: appIcon || '',
+            appIcon: cleanAppIcon,
             hints: hints || {},
             actions: parsedActions,
             datetime: GLib.DateTime.new_now_local(),
@@ -178,6 +192,7 @@ export class NotificationCenter extends EventEmitter {
         };
 
         this._notifications.set(id, notification);
+        print(`[Isle NotificationCenter] Added notification id=${id}, total count=${this._notifications.size}`);
 
         if (isUpdate) {
             this.emit('updated', notification);
@@ -293,3 +308,4 @@ export class NotificationCenter extends EventEmitter {
         this.disconnectAll();
     }
 }
+

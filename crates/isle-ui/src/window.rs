@@ -25,6 +25,9 @@ pub const COMPACT_HEIGHT: f64 = 38.0;
 pub const COMPACT_RADIUS: f64 = 18.0;
 pub const COMPACT_SHOULDER: f64 = 0.0;
 
+/// Temporary Dynamic Island Peek alert width for notifications (380 × 38 px):
+pub const PEEK_WIDTH: f64 = 380.0;
+
 /// Standard expanded proportions for media, timer, usage (600 × 300 px):
 pub const STANDARD_EXPANDED_WIDTH: f64 = 600.0;
 pub const STANDARD_EXPANDED_HEIGHT: f64 = 300.0;
@@ -507,6 +510,13 @@ impl FloatingWindow {
                     EXPANDED_SHOULDER,
                 )
             }
+        } else if self.0.window.has_css_class("isle-mode-peek") {
+            (
+                PEEK_WIDTH,
+                COMPACT_HEIGHT,
+                COMPACT_RADIUS,
+                COMPACT_SHOULDER,
+            )
         } else {
             (COMPACT_WIDTH, COMPACT_HEIGHT, COMPACT_RADIUS, COMPACT_SHOULDER)
         };

@@ -123,6 +123,11 @@ export function init() {
     const compactView = new CompactView(daemon);
     const expandedView = new ExpandedView(daemon, {}, {}, {}, pages);
 
+    // Wire Dynamic Island notification peek alert onto compact notch
+    notificationCenter.connect('banner', (_center, notification) => {
+        compactView.showNotificationPeek(notification);
+    });
+
     // Expose for runtime inspection and testing
     globalThis.isleExpanded = expandedView;
     globalThis.isleCompact = compactView;
@@ -214,7 +219,9 @@ export function init() {
                     }
                 }
             }
-        } catch (_) {}
+        } catch (e) {
+            print('[Isle IPC ERROR]', e);
+        }
         return GLib.SOURCE_CONTINUE;
     });
 

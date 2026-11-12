@@ -2,9 +2,13 @@
 // Copyright (C) 2026 zickrian
 
 //! Notifications page for Isle XFCE GTK4 runtime.
-//! Faithful port of upstream gnome-extension/src/pages/notifications.js.
-//! Displays incoming desktop notifications, DND controls, action triggers, and dismissal.
+//! Faithful port of upstream gnome-extension/src/pages/notifications.js with:
+//! - iOS-style notification stacking for multiple messages from the same sender
+//! - Inline Quick Reply for WhatsApp and messaging apps with desktop integration
+//! - Interactive actions, timestamps, and Do Not Disturb controls.
 
+import Gdk from 'gi://Gdk?version=4.0';
+import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import GObject from 'gi://GObject';
 import Gtk from 'gi://Gtk?version=4.0';
@@ -60,6 +64,7 @@ export const NotificationsPage = GObject.registerClass({
 
         this._center = center;
         this._times = [];
+        this._expandedStacks = new Set();
 
         this._buildUi();
 
@@ -204,6 +209,7 @@ export const NotificationsPage = GObject.registerClass({
     _update() {
         this._times = [];
         const notifications = this._center.notifications;
+        print(`[Isle NotificationsPage _update] notifications count: ${notifications.length}`);
         this._clearButton.set_visible(notifications.length > 0);
 
         // Remove old rows
@@ -219,13 +225,77 @@ export const NotificationsPage = GObject.registerClass({
             return;
         }
 
+        // Group notifications iOS style by sender (${appName}::${title})
+        const groups = new Map();
         for (const n of notifications) {
-            this._list.append(this._buildRow(n));
+            const key = `${n.appName}::${n.title}`;
+            if (!groups.has(key)) {
+                groups.set(key, []);
+            }
+            groups.get(key).push(n);
         }
+
+        for (const [key, groupItems] of groups.entries()) {
+            if (groupItems.length === 1) {
+                // Standalone notification
+                this._list.append(this._buildRow(groupItems[0]));
+            } else {
+                // Multiple notifications from same sender: iOS-style stack
+                const isStackExpanded = this._expandedStacks.has(key);
+                if (!isStackExpanded) {
+                    // Collapsed Stack: Top card + stacked card layers underneath
+                    const stackBox = new Gtk.Box({
+                        orientation: Gtk.Orientation.VERTICAL,
+                        spacing: 0,
+                        css_classes: ['isle-notification-stack'],
+                    });
+
+                    const topRow = this._buildRow(groupItems[0], {
+                        badgeCount: groupItems.length,
+                        onStackClick: () => {
+                            this._expandedStacks.add(key);
+                            this._update();
+                        },
+                    });
+                    stackBox.append(topRow);
+
+                    const layer1 = new Gtk.Box({ css_classes: ['isle-notification-stack-layer-1'] });
+                    const layer2 = new Gtk.Box({ css_classes: ['isle-notification-stack-layer-2'] });
+                    stackBox.append(layer1);
+                    stackBox.append(layer2);
+
+                    this._list.append(stackBox);
+                } else {
+                    // Expanded Stack: Header with collapse button + all message rows
+                    const header = new Gtk.Box({
+                        orientation: Gtk.Orientation.HORIZONTAL,
+                        spacing: 8,
+                        css_classes: ['isle-notification-group-header'],
+                    });
+
+                    const groupTitle = label(`${groupItems[0].title || groupItems[0].appName} (${groupItems.length} messages)`,
+                        'isle-notification-group-title', { hexpand: true, valign: Gtk.Align.CENTER });
+                    header.append(groupTitle);
+
+                    const collapseBtn = pillButton('Collapse stack', 'isle-notification-group-collapse', () => {
+                        this._expandedStacks.delete(key);
+                        this._update();
+                    });
+                    collapseBtn.set_valign(Gtk.Align.CENTER);
+                    header.append(collapseBtn);
+                    this._list.append(header);
+
+                    for (const n of groupItems) {
+                        this._list.append(this._buildRow(n));
+                    }
+                }
+            }
+        }
+
         this._stack.set_visible_child_name('list');
     }
 
-    _buildRow(notification) {
+    _buildRow(notification, { badgeCount = 0, onStackClick = null } = {}) {
         const row = new Gtk.Button({
             css_classes: ['isle-notification-row'],
             hexpand: true,
@@ -243,7 +313,7 @@ export const NotificationsPage = GObject.registerClass({
         const badge = notificationBadge(notification);
         content.append(badge);
 
-        // Texts: Title + Body + Actions
+        // Texts: Title + Stack Badge + Body + Actions + Inline Reply
         const texts = new Gtk.Box({
             orientation: Gtk.Orientation.VERTICAL,
             spacing: 2,
@@ -252,12 +322,28 @@ export const NotificationsPage = GObject.registerClass({
             css_classes: ['isle-notification-texts'],
         });
 
+        const titleRow = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 6,
+            valign: Gtk.Align.CENTER,
+        });
+
         const titleText = (notification.title || notification.appName || '').replace(/\s+/g, ' ').trim();
         const titleLabel = label(titleText, 'isle-notification-title', {
             halign: Gtk.Align.START,
+            valign: Gtk.Align.CENTER,
         });
         titleLabel.set_ellipsize(Pango.EllipsizeMode.END);
-        texts.append(titleLabel);
+        titleRow.append(titleLabel);
+
+        // If stacked, display "+X more" pill
+        if (badgeCount > 1) {
+            const stackBadge = label(`+${badgeCount - 1} more`, 'isle-notification-stack-badge', {
+                valign: Gtk.Align.CENTER,
+            });
+            titleRow.append(stackBadge);
+        }
+        texts.append(titleRow);
 
         const bodyText = (notification.body || '').replace(/\s+/g, ' ').trim();
         if (bodyText) {
@@ -271,23 +357,75 @@ export const NotificationsPage = GObject.registerClass({
             texts.append(bodyLabel);
         }
 
-        // Action buttons
-        const actions = (notification.actions || []).filter(a => a.id !== 'default').slice(0, MAX_ACTIONS);
-        if (actions.length > 0) {
-            const actionsBox = new Gtk.Box({
-                orientation: Gtk.Orientation.HORIZONTAL,
-                spacing: 6,
-                css_classes: ['isle-notification-actions'],
-            });
-            for (const action of actions) {
-                const btn = pillButton(action.label, 'isle-pill-small isle-notification-action', () => {
-                    action.activate();
-                    this.emit('request-close');
-                });
-                actionsBox.append(btn);
+        // Inline Reply revealer & entry
+        const isMessaging = notification.appName.toLowerCase().includes('whatsapp') ||
+            notification.title.toLowerCase().includes('whatsapp') ||
+            notification.rawBody.toLowerCase().includes('whatsapp');
+
+        const replyRevealer = new Gtk.Revealer({
+            transition_type: Gtk.RevealerTransitionType.SLIDE_DOWN,
+            transition_duration: 180,
+            reveal_child: false,
+        });
+
+        const replyBox = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 6,
+            css_classes: ['isle-notification-inline-reply'],
+        });
+
+        const replyEntry = new Gtk.Entry({
+            placeholder_text: `Reply to ${notification.title || 'chat'}...`,
+            hexpand: true,
+            css_classes: ['isle-notification-reply-entry'],
+        });
+
+        const sendReply = () => {
+            const text = replyEntry.get_text().trim();
+            if (text) {
+                this._sendReply(notification, text);
             }
+        };
+
+        replyEntry.connect('activate', sendReply);
+
+        const sendBtn = pillButton('Send', 'isle-notification-reply-send', sendReply);
+        replyBox.append(replyEntry);
+        replyBox.append(sendBtn);
+        replyRevealer.set_child(replyBox);
+
+        // Action buttons
+        const actionsBox = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 6,
+            css_classes: ['isle-notification-actions'],
+        });
+
+        // Add Quick "Reply" action for WhatsApp or messaging apps
+        if (isMessaging) {
+            const replyActionBtn = pillButton('Reply', 'isle-pill-small isle-notification-action', () => {
+                const nowOpen = !replyRevealer.get_reveal_child();
+                replyRevealer.set_reveal_child(nowOpen);
+                if (nowOpen) {
+                    replyEntry.grab_focus();
+                }
+            });
+            actionsBox.append(replyActionBtn);
+        }
+
+        const actions = (notification.actions || []).filter(a => a.id !== 'default' && a.id !== 'settings').slice(0, MAX_ACTIONS);
+        for (const action of actions) {
+            const btn = pillButton(action.label, 'isle-pill-small isle-notification-action', () => {
+                action.activate();
+                this.emit('request-close');
+            });
+            actionsBox.append(btn);
+        }
+
+        if (isMessaging || actions.length > 0) {
             texts.append(actionsBox);
         }
+        texts.append(replyRevealer);
 
         content.append(texts);
 
@@ -316,13 +454,45 @@ export const NotificationsPage = GObject.registerClass({
         content.append(corner);
         row.set_child(content);
 
-        // Clicking card activates notification
+        // Clicking card
         row.connect('clicked', () => {
-            notification.activate();
-            this.emit('request-close');
+            if (onStackClick) {
+                onStackClick();
+            } else if (isMessaging) {
+                // Focus WhatsApp directly
+                GLib.spawn_command_line_async('wmctrl -a "WhatsApp"');
+                this.emit('request-close');
+            } else {
+                notification.activate();
+                this.emit('request-close');
+            }
         });
 
         return row;
+    }
+
+    _sendReply(notification, text) {
+        try {
+            // 1. Copy reply text to system clipboard
+            const display = Gdk.Display.get_default();
+            const clipboard = display.get_clipboard();
+            clipboard.set(text);
+
+            // 2. Bring WhatsApp Web / client window to the foreground
+            GLib.spawn_command_line_async('wmctrl -a "WhatsApp"');
+
+            // 3. Automatically paste and hit Enter to send
+            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 350, () => {
+                GLib.spawn_command_line_async('xdotool key "ctrl+v" Return');
+                return GLib.SOURCE_REMOVE;
+            });
+
+            // 4. Dismiss notification & request close
+            notification.destroy();
+            this.emit('request-close');
+        } catch (e) {
+            logError(e, '[Isle Notifications] Error sending quick reply');
+        }
     }
 
     onActivate() {
