@@ -430,14 +430,14 @@ button.isle-button, button.isle-pill, button.isle-tab, button.isle-corner-close 
 /* ── Expanded: frame ──────────────────────────────────── */
 
 /* What shows lines up with the pages' 20px edges: the open tab's pill on the left, the settings icon on the right. */
-.isle-header { padding: 0 16px 0 20px; }
+.isle-header { padding: 0 14px 0 16px; }
 .isle-header-clock { spacing: 8px; }
 
 /* Tabs to the pages: icons, with the open page's name in a lit pill. */
 .isle-tabs { spacing: 2px; }
 
 .isle-tab {
-  padding: 4px 10px;
+  padding: 4px 7px;
   border-radius: 999px;
   color: #ffffff;
   transition-duration: 150ms;
