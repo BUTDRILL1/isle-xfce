@@ -433,6 +433,7 @@ button.isle-button, button.isle-pill, button.isle-tab, button.isle-corner-close 
 .isle-header {
   padding: 6px 14px 0 16px;
   margin-top: 4px;
+  margin-bottom: 12px;
 }
 .isle-header-clock { spacing: 8px; }
 
