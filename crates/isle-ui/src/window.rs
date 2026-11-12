@@ -43,8 +43,8 @@ pub const EXPANDED_HEIGHT: f64 = STANDARD_EXPANDED_HEIGHT;
 pub const EXPANDED_RADIUS: f64 = 24.0;
 pub const EXPANDED_SHOULDER: f64 = 0.0;
 
-/// Dark frosted glass fill with 0.22 opacity.
-const FILL_RGBA: [f32; 4] = [0.03, 0.04, 0.05, 0.22];
+/// Dark frosted glass fill with 0.09 opacity.
+const FILL_RGBA: [f32; 4] = [0.03, 0.04, 0.05, 0.09];
 const EDGE_RGBA: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 const EDGE_ALPHA: [f32; 2] = [0.15, 0.15];
 
