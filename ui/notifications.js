@@ -49,13 +49,31 @@ const IFACE_XML = `
 /** Plain text of a notification body that may contain markup. */
 export function plainBody(text) {
     if (!text) return '';
-    return text
-        .replace(/<\/?[biu]>/g, '')
-        .replace(/&lt;/g, '<')
-        .replace(/&gt;/g, '>')
+    let s = String(text);
+    // Replace line break tags with newlines
+    s = s.replace(/<br\s*\/?>/gi, '\n');
+    s = s.replace(/<\/p>/gi, '\n');
+    // Extract link text from anchor tags, discarding empty anchors
+    s = s.replace(/<a\b[^>]*>([\s\S]*?)<\/a>/gi, (_match, inner) => inner ? inner.trim() : '');
+    // Remove all remaining tags (e.g. <img>, <span>, <div>, <b>, <i>, <u>, etc.)
+    s = s.replace(/<[^>]+>/g, '');
+    // Decode HTML / XML entities
+    s = s
         .replace(/&quot;/g, '"')
         .replace(/&apos;/g, "'")
+        .replace(/&#39;/g, "'")
+        .replace(/&#039;/g, "'")
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&nbsp;/g, ' ')
+        .replace(/&#(\d+);/g, (_, code) => {
+            try { return String.fromCodePoint(parseInt(code, 10)); } catch (_) { return ''; }
+        })
+        .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => {
+            try { return String.fromCodePoint(parseInt(hex, 16)); } catch (_) { return ''; }
+        })
         .replace(/&amp;/g, '&');
+    return s.trim();
 }
 
 export class NotificationCenter extends EventEmitter {
@@ -171,7 +189,7 @@ export class NotificationCenter extends EventEmitter {
         const notification = {
             id,
             appName: cleanAppName,
-            title: summary || cleanAppName || '',
+            title: plainBody(summary) || cleanAppName || '',
             body: plainBody(cleanBody),
             rawBody: body || '',
             appIcon: cleanAppIcon,

@@ -8,8 +8,9 @@ import GLib from 'gi://GLib';
 import GObject from 'gi://GObject';
 import Gtk from 'gi://Gtk?version=4.0';
 
-import * as Format from 'file:///home/butarch/Desktop/isle-upstream/gnome-extension/src/format.js';
+import * as Format from './format.js';
 import { AssistantView } from './assistant.js';
+import { SettingsPage } from './pages/settings.js';
 import {
     Bars,
     PrivacyDots,
@@ -18,6 +19,7 @@ import {
     icon,
     iconButton,
     label,
+    pillButton,
 } from './widgets.js';
 
 export const STANDARD_EXPANDED_WIDTH = 600;
@@ -93,11 +95,9 @@ export const ExpandedView = GObject.registerClass({
 
         // 1. Build Header Row (Tabs on left, Status and Clock on right)
         this._header = this._buildHeader();
-        this.append(this._header);
 
         // 2. Build Pager (GtkStack sliding page container)
         this._pagerArea = this._buildPager();
-        this.append(this._pagerArea);
 
         // 3. Bottom padding widget (20px)
         const bottom = new Gtk.Box({
@@ -105,7 +105,31 @@ export const ExpandedView = GObject.registerClass({
             css_classes: ['isle-expanded-bottom'],
         });
         bottom.set_size_request(-1, BOTTOM_PADDING);
-        this.append(bottom);
+
+        // 4. Normal view containing header, pager, and bottom padding
+        const normalBox = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            hexpand: true,
+            vexpand: true,
+        });
+        normalBox.append(this._header);
+        normalBox.append(this._pagerArea);
+        normalBox.append(bottom);
+
+        // 5. Stack switching between Normal view and Alarm blanking overlay
+        this._overlayStack = new Gtk.Stack({
+            transition_type: Gtk.StackTransitionType.CROSSFADE,
+            transition_duration: 180,
+            hexpand: true,
+            vexpand: true,
+        });
+
+        this._alarmOverlay = this._buildAlarmOverlay();
+        this._overlayStack.add_named(normalBox, 'normal');
+        this._overlayStack.add_named(this._alarmOverlay, 'alarm');
+        this._overlayStack.set_visible_child_name('normal');
+
+        this.append(this._overlayStack);
 
         // Connect page signals
         for (const page of this._pages) {
@@ -217,14 +241,16 @@ export const ExpandedView = GObject.registerClass({
         status.append(clock);
 
         // Settings button
-        const settings = iconButton('isle-settings', 'isle-button-flat isle-header-settings', () => {
+        const settings = this._settingsBtn = iconButton('isle-settings', 'isle-button-flat isle-header-settings', () => {
             this.emit('settings-requested');
         }, { size: 15, accessibleName: 'Settings' });
         settings.set_opacity(SETTINGS_OPACITY);
 
         const motion = new Gtk.EventControllerMotion();
         motion.connect('enter', () => settings.set_opacity(1.0));
-        motion.connect('leave', () => settings.set_opacity(SETTINGS_OPACITY));
+        motion.connect('leave', () => {
+            if (!this._settingsActive) settings.set_opacity(SETTINGS_OPACITY);
+        });
         settings.add_controller(motion);
         status.append(settings);
 
@@ -374,6 +400,12 @@ export const ExpandedView = GObject.registerClass({
             this.toggleAssistant(false);
         });
 
+        // Settings view inside content stack
+        this._settingsPage = new SettingsPage(this._daemon);
+        this._settingsPage.connect('request-close', () => {
+            this.toggleSettings(false);
+        });
+
         this._contentStack = new Gtk.Stack({
             transition_type: Gtk.StackTransitionType.CROSSFADE,
             transition_duration: 180,
@@ -383,6 +415,7 @@ export const ExpandedView = GObject.registerClass({
 
         this._contentStack.add_named(this._pager, 'pager');
         this._contentStack.add_named(this._assistantView, 'assistant');
+        this._contentStack.add_named(this._settingsPage, 'settings');
         this._contentStack.set_visible_child_name('pager');
 
         area.append(this._contentStack);
@@ -394,11 +427,89 @@ export const ExpandedView = GObject.registerClass({
         return area;
     }
 
+    _buildAlarmOverlay() {
+        const box = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 16,
+            valign: Gtk.Align.CENTER,
+            halign: Gtk.Align.CENTER,
+            hexpand: true,
+            vexpand: true,
+            css_classes: ['isle-alarm-overlay'],
+        });
+
+        // Icon + Subtitle
+        const topRow = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 8,
+            valign: Gtk.Align.CENTER,
+            halign: Gtk.Align.CENTER,
+        });
+        this._expandedAlarmIcon = new Gtk.Image({
+            gicon: icon('isle-timer'),
+            pixel_size: 28,
+        });
+        topRow.append(this._expandedAlarmIcon);
+
+        this._expandedAlarmHint = label("Time's Up!", 'isle-alarm-overlay-hint');
+        topRow.append(this._expandedAlarmHint);
+        box.append(topRow);
+
+        // Huge Time Display
+        this._expandedAlarmTime = label('00:00', 'isle-alarm-overlay-time', {
+            halign: Gtk.Align.CENTER,
+        });
+        box.append(this._expandedAlarmTime);
+
+        // Action Buttons Row: Dismiss & Snooze
+        const btnRow = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 20,
+            valign: Gtk.Align.CENTER,
+            halign: Gtk.Align.CENTER,
+        });
+
+        const dismissBtn = pillButton('Dismiss', 'isle-pill-small isle-alarm-overlay-btn', () => {
+            this._endAlarmOverlay();
+            if (this._onExpandedAlarmDismiss) this._onExpandedAlarmDismiss();
+        });
+        dismissBtn.set_size_request(130, 42);
+        btnRow.append(dismissBtn);
+
+        const snoozeBtn = pillButton('Snooze (+5m)', 'isle-pill-accent isle-alarm-overlay-btn', () => {
+            this._endAlarmOverlay();
+            if (this._onExpandedAlarmSnooze) this._onExpandedAlarmSnooze();
+        });
+        snoozeBtn.set_size_request(140, 42);
+        btnRow.append(snoozeBtn);
+
+        box.append(btnRow);
+        return box;
+    }
+
+    showAlarmOverlay({ type = 'timer', timeStr = '00:00', labelText = "Time's Up!", onDismiss = null, onSnooze = null }) {
+        this._onExpandedAlarmDismiss = onDismiss;
+        this._onExpandedAlarmSnooze = onSnooze;
+
+        this._expandedAlarmHint.set_text(labelText);
+        this._expandedAlarmTime.set_text(timeStr);
+        this._expandedAlarmIcon.set_from_gicon(icon(type === 'alarm' ? 'isle-bell' : 'isle-timer'));
+
+        this._overlayStack.set_visible_child_name('alarm');
+    }
+
+    _endAlarmOverlay() {
+        this._overlayStack.set_visible_child_name('normal');
+    }
+
     toggleAssistant(open = null) {
         const isAssistant = this._contentStack.get_visible_child_name() === 'assistant';
         const target = open !== null ? open : !isAssistant;
         const win = this.get_root() || Gtk.Application.get_default()?.get_active_window();
         if (target) {
+            if (this._settingsActive) {
+                this.toggleSettings(false);
+            }
             this._contentStack.set_visible_child_name('assistant');
             this._assistantActive = true;
             if (win && win.add_css_class) {
@@ -414,6 +525,39 @@ export const ExpandedView = GObject.registerClass({
             }
             this._syncHeight();
         }
+    }
+
+    toggleSettings(open = null) {
+        const isSettings = this._contentStack.get_visible_child_name() === 'settings';
+        const target = open !== null ? open : !isSettings;
+        if (target) {
+            if (this._assistantActive) {
+                this.toggleAssistant(false);
+            }
+            this._contentStack.set_visible_child_name('settings');
+            this._settingsActive = true;
+            this._settingsBtn?.add_css_class('active');
+            this._settingsBtn?.set_opacity(1.0);
+            this._syncHeight();
+        } else {
+            this._contentStack.set_visible_child_name('pager');
+            this._settingsActive = false;
+            this._settingsBtn?.remove_css_class('active');
+            this._settingsBtn?.set_opacity(SETTINGS_OPACITY);
+            this._syncHeight();
+        }
+    }
+
+    showSettings() {
+        this.toggleSettings(true);
+    }
+
+    get isSettingsOpen() {
+        return Boolean(this._settingsActive);
+    }
+
+    get settingsPage() {
+        return this._settingsPage;
     }
 
     focusAssistantEntry() {
@@ -452,6 +596,15 @@ export const ExpandedView = GObject.registerClass({
     }
 
     showPage(target, { animate = true } = {}) {
+        if (target === 'settings') {
+            this.toggleSettings(true);
+            return;
+        }
+
+        if (this._contentStack && this._contentStack.get_visible_child_name() === 'settings') {
+            this.toggleSettings(false);
+        }
+
         if (this._contentStack && this._contentStack.get_visible_child_name() === 'assistant') {
             this.toggleAssistant(false);
         }
@@ -562,6 +715,8 @@ export const ExpandedView = GObject.registerClass({
         let targetH = 300;
         if (this._assistantActive) {
             targetH = 380;
+        } else if (this._settingsActive) {
+            targetH = 300;
         } else if (this.page && typeof this.page.getDesiredHeight === 'function') {
             targetH = this.page.getDesiredHeight();
         } else if (this.page?.name === 'music' || this.page?.name === 'focus') {

@@ -27,7 +27,14 @@ const INTERFACE: &str = "org.freedesktop.UPower.Device";
 const FLAP_WINDOW: Duration = Duration::from_secs(30);
 
 /// The properties read; a change to any other (the energy, the rate, the time it was measured) is not.
-const READ: [&str; 4] = ["IsPresent", "Type", "State", "Percentage"];
+const READ: [&str; 6] = [
+    "IsPresent",
+    "Type",
+    "State",
+    "Percentage",
+    "TimeToEmpty",
+    "TimeToFull",
+];
 
 // UPower device types and states.
 const TYPE_BATTERY: u32 = 2;
@@ -110,6 +117,8 @@ struct Reading {
     percent: f64,
     plugged: bool,
     charging: bool,
+    time_to_empty: Option<i64>,
+    time_to_full: Option<i64>,
 }
 
 impl Reading {
@@ -119,6 +128,8 @@ impl Reading {
             percent: self.percent.round(),
             plugged: self.plugged,
             charging: self.charging,
+            time_to_empty: self.time_to_empty,
+            time_to_full: self.time_to_full,
         }
     }
 }
@@ -126,6 +137,7 @@ impl Reading {
 /// The battery and whether it is fully charged, or `None` without a battery.
 fn read(all: &HashMap<String, OwnedValue>) -> Option<(Reading, bool)> {
     let u32_of = |key: &str| all.get(key).and_then(|v| u32::try_from(v).ok());
+    let i64_of = |key: &str| all.get(key).and_then(|v| i64::try_from(v).ok());
 
     let present = all
         .get("IsPresent")
@@ -135,6 +147,8 @@ fn read(all: &HashMap<String, OwnedValue>) -> Option<(Reading, bool)> {
         return None;
     }
     let state = u32_of("State").unwrap_or(0);
+    let time_to_empty = i64_of("TimeToEmpty").filter(|&s| s > 0);
+    let time_to_full = i64_of("TimeToFull").filter(|&s| s > 0);
     let battery = Reading {
         percent: all
             .get("Percentage")
@@ -145,6 +159,8 @@ fn read(all: &HashMap<String, OwnedValue>) -> Option<(Reading, bool)> {
             STATE_CHARGING | STATE_FULLY_CHARGED | STATE_PENDING_CHARGE
         ),
         charging: state == STATE_CHARGING,
+        time_to_empty,
+        time_to_full,
     };
     Some((battery, state == STATE_FULLY_CHARGED))
 }
@@ -159,6 +175,8 @@ mod tests {
             percent,
             plugged: false,
             charging: false,
+            time_to_empty: None,
+            time_to_full: None,
         };
         assert_eq!(reading(57.4).shown().percent, 57.0);
         assert_eq!(reading(57.5).shown().percent, 58.0);

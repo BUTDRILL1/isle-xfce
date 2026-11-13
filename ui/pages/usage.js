@@ -11,6 +11,7 @@ import Pango from 'gi://Pango';
 
 import { icon, label } from '../widgets.js';
 import { Page } from '../page.js';
+import { getTelemetryMonitor, getBatteryTelemetry, sampleNetworkThroughput } from '../telemetry.js';
 
 const ACCENTS = {
     claude: '#d97857',
@@ -40,6 +41,9 @@ export const UsagePage = GObject.registerClass({
 
         this.watch(['usage', 'system'], () => this._update());
         this._update();
+
+        this._monitor = getTelemetryMonitor();
+        this._monitorHandler = this._monitor.connect('updated', () => this._updateLiveTelemetry());
     }
 
     _providers() {
@@ -195,19 +199,28 @@ export const UsagePage = GObject.registerClass({
             css_classes: ['isle-usage-limits'],
         });
 
-        // 1. Battery Telemetry (from System1)
+        // 1. Battery Telemetry (from System1 + UPower)
         const battery = system.battery;
-        if (battery) {
-            const pct = Math.round(battery.percent || 100);
-            const status = battery.charging ? 'Charging' : battery.plugged ? 'AC Connected' : 'Battery';
-            limits.append(this._buildTelemetryRow('Battery', `${pct}% (${status})`, pct / 100));
+        const batInfo = getBatteryTelemetry(battery);
+        if (batInfo) {
+            const { row, descLbl, track } = this._buildTelemetryRow('Battery', batInfo.fullText, batInfo.percent / 100);
+            this._batteryDescLbl = descLbl;
+            this._batteryTrack = track;
+            limits.append(row);
+        } else {
+            this._batteryDescLbl = null;
+            this._batteryTrack = null;
         }
 
-        // 2. Network Activity (from System1)
+        // 2. Network Activity (from System1 + /proc/net/dev)
         const net = system.network;
         const netPct = net?.connected ? 1.0 : 0.0;
-        const netDesc = net?.connected ? `${net.name} (${net.connection})` : 'Disconnected';
-        limits.append(this._buildTelemetryRow('Network Status', netDesc, netPct));
+        const netSpeed = sampleNetworkThroughput();
+        const netDesc = net?.connected ? netSpeed.formatted : 'Disconnected';
+        const { row, descLbl, track } = this._buildTelemetryRow('Network Status', netDesc, netPct);
+        this._netDescLbl = descLbl;
+        this._netTrack = track;
+        limits.append(row);
 
         // 3. Continuous CPU / RAM API note
         const noteRow = new Gtk.Box({
@@ -225,6 +238,25 @@ export const UsagePage = GObject.registerClass({
         limits.append(noteRow);
 
         this._card.append(limits);
+    }
+
+    _updateLiveTelemetry() {
+        const system = this._system();
+        if (this._batteryDescLbl) {
+            const batInfo = getBatteryTelemetry(system.battery);
+            if (batInfo) {
+                this._batteryDescLbl.set_text(batInfo.fullText);
+                if (this._batteryTrack) {
+                    this._batteryTrack.set_fraction(batInfo.percent / 100);
+                }
+            }
+        }
+        if (this._netDescLbl) {
+            const net = system.network;
+            const netSpeed = sampleNetworkThroughput();
+            const netDesc = net?.connected ? netSpeed.formatted : 'Disconnected';
+            this._netDescLbl.set_text(netDesc);
+        }
     }
 
     _buildTelemetryRow(name, desc, fraction) {
@@ -255,7 +287,7 @@ export const UsagePage = GObject.registerClass({
         });
         row.append(track);
 
-        return row;
+        return { row, descLbl, track };
     }
 });
 

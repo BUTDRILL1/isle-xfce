@@ -23,6 +23,61 @@ import { executeActions, stopUnit } from './actions.js';
 const FACE_SIZE = 36;
 const POINTER_REST_S = 2.5;
 
+/**
+ * Strips raw trailing action JSON objects such as {"done": true, ...} or {"actions": ...}
+ * from LLM message text before passing items to the ChatView.
+ */
+export function stripActionJson(text) {
+    if (!text || typeof text !== 'string') return text || '';
+    let cleaned = text.trim();
+
+    // 1. Markdown code block at the end: ```json ... ```
+    const codeBlockMatch = cleaned.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```\s*$/i);
+    if (codeBlockMatch) {
+        try {
+            const parsed = JSON.parse(codeBlockMatch[1]);
+            if (parsed && typeof parsed === 'object' && (parsed.actions !== undefined || parsed.done !== undefined || parsed.say !== undefined)) {
+                if (codeBlockMatch.index === 0) {
+                    return parsed.say ? stripActionJson(parsed.say) : '';
+                }
+                cleaned = cleaned.substring(0, codeBlockMatch.index).trim();
+            }
+        } catch (_) {}
+    }
+
+    // 2. Entire text is a JSON object
+    if (cleaned.startsWith('{') && cleaned.endsWith('}')) {
+        try {
+            const parsed = JSON.parse(cleaned);
+            if (parsed && typeof parsed === 'object' && (parsed.actions !== undefined || parsed.done !== undefined || parsed.say !== undefined)) {
+                return parsed.say ? stripActionJson(parsed.say) : '';
+            }
+        } catch (_) {}
+    }
+
+    // 3. Trailing complete JSON object
+    if (cleaned.endsWith('}')) {
+        for (let i = 0; i < cleaned.length; i++) {
+            if (cleaned[i] === '{') {
+                const candidate = cleaned.slice(i);
+                try {
+                    const parsed = JSON.parse(candidate);
+                    if (parsed && typeof parsed === 'object' && (parsed.actions !== undefined || parsed.done !== undefined)) {
+                        cleaned = cleaned.slice(0, i).trim();
+                        break;
+                    }
+                } catch (_) {}
+            }
+        }
+    }
+
+    // 4. Trailing streaming/unclosed JSON object containing "actions" or "done"
+    cleaned = cleaned.replace(/```(?:json)?\s*\{[\s\S]*?(?:"actions"|"done")[\s\S]*?(?:```)?\s*$/i, '').trim();
+    cleaned = cleaned.replace(/\{[^{}]*?(?:"actions"|"done")[\s\S]*$/i, '').trim();
+
+    return cleaned;
+}
+
 /** Suggestion chips when the entry is empty. */
 const IDEAS = [
     ['Today’s plan', 'What’s on my calendar today?', true],
@@ -566,7 +621,12 @@ export const AssistantView = GObject.registerClass({
     _syncHistory() {
         const chat = this._daemon?.state?.chat;
         if (Array.isArray(chat) && chat.length > 0) {
-            this._history = chat;
+            this._history = chat.map(item => {
+                if (item && item.text && (item.role === 'assistant' || !item.role)) {
+                    return { ...item, text: stripActionJson(item.text) };
+                }
+                return item;
+            }).filter(item => item.role !== 'assistant' || (item.text && item.text.trim().length > 0));
             this._chatView.setItems(this._history);
             this._chatView.set_visible(true);
             this._ideasBox.set_visible(false);
@@ -633,33 +693,39 @@ export const AssistantView = GObject.registerClass({
         }
 
         if (state.draft) {
-            const lastMsg = this._history[this._history.length - 1];
-            if (lastMsg && lastMsg.role === 'assistant') {
-                lastMsg.text = state.draft;
-            } else {
-                this._history.push({
-                    role: 'assistant',
-                    text: state.draft,
-                    at: GLib.get_real_time() / 1000,
-                });
+            const cleanDraft = stripActionJson(state.draft);
+            if (cleanDraft) {
+                const lastMsg = this._history[this._history.length - 1];
+                if (lastMsg && lastMsg.role === 'assistant') {
+                    lastMsg.text = cleanDraft;
+                } else {
+                    this._history.push({
+                        role: 'assistant',
+                        text: cleanDraft,
+                        at: GLib.get_real_time() / 1000,
+                    });
+                }
+                this._chatView.setItems(this._history);
+                this._chatView.set_visible(true);
+                this._ideasBox.set_visible(false);
             }
-            this._chatView.setItems(this._history);
-            this._chatView.set_visible(true);
-            this._ideasBox.set_visible(false);
         } else if (state.reply && state.phase === 'reply') {
-            const lastMsg = this._history[this._history.length - 1];
-            if (lastMsg && lastMsg.role === 'assistant') {
-                lastMsg.text = state.reply;
-            } else {
-                this._history.push({
-                    role: 'assistant',
-                    text: state.reply,
-                    at: GLib.get_real_time() / 1000,
-                });
+            const cleanReply = stripActionJson(state.reply);
+            if (cleanReply) {
+                const lastMsg = this._history[this._history.length - 1];
+                if (lastMsg && lastMsg.role === 'assistant') {
+                    lastMsg.text = cleanReply;
+                } else {
+                    this._history.push({
+                        role: 'assistant',
+                        text: cleanReply,
+                        at: GLib.get_real_time() / 1000,
+                    });
+                }
+                this._chatView.setItems(this._history);
+                this._chatView.set_visible(true);
+                this._ideasBox.set_visible(false);
             }
-            this._chatView.setItems(this._history);
-            this._chatView.set_visible(true);
-            this._ideasBox.set_visible(false);
         }
 
         if (state.card && typeof state.card === 'object' && state.card.command) {

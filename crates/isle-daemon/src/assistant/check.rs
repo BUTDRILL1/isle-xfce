@@ -378,6 +378,11 @@ const SHAPES: &[(&str, &str, Rest)] = &[
     ("gsettings", "range", Rest::Names(&[])),
     ("gsettings", "describe", Rest::Names(&[])),
     ("gsettings", "list-schemas", Rest::None),
+    ("xfconf-query", "-l", Rest::None),
+    ("xfconf-query", "--list", Rest::None),
+    ("xfconf-query", "--version", Rest::None),
+    ("xfconf-query", "-c", Rest::Names(&["-p", "-l", "-v", "-lv"])),
+    ("xfce4-settings-manager", "--version", Rest::None),
     (
         "gnome-extensions",
         "list",

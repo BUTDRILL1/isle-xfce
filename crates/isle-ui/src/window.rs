@@ -28,6 +28,11 @@ pub const COMPACT_SHOULDER: f64 = 0.0;
 /// Temporary Dynamic Island Peek alert width for notifications (380 × 38 px):
 pub const PEEK_WIDTH: f64 = 380.0;
 
+/// Double-height Dynamic Island Alert for ringing Timer and Alarm (360 × 82 px):
+pub const ALARM_ALERT_WIDTH: f64 = 360.0;
+pub const ALARM_ALERT_HEIGHT: f64 = 82.0;
+pub const ALARM_ALERT_RADIUS: f64 = 24.0;
+
 /// Standard expanded proportions for media, timer, usage (600 × 300 px):
 pub const STANDARD_EXPANDED_WIDTH: f64 = 600.0;
 pub const STANDARD_EXPANDED_HEIGHT: f64 = 300.0;
@@ -363,6 +368,9 @@ impl FloatingWindow {
             let floating = FloatingWindow(inner.clone());
 
             if !is_exp {
+                if inner.window.has_css_class("isle-mode-alarm-alert") {
+                    return;
+                }
                 info!(
                     "[INTERACTION] Click received at screen ({sx:.1}, {sy:.1}) [widget ({x:.1}, {y:.1})] on compact notch ({cur_w:.1}x{cur_h:.1}); expanding"
                 );
@@ -460,6 +468,10 @@ impl FloatingWindow {
 
     /// Sets the target state: Compact (resting) or Expanded with an explicit reason.
     pub fn set_expanded(&self, expanded: bool, reason: &str) {
+        if self.0.window.has_css_class("isle-mode-alarm-alert") && expanded {
+            return;
+        }
+
         if self.0.is_expanded.get() == expanded {
             return;
         }
@@ -494,7 +506,14 @@ impl FloatingWindow {
         let is_asst = self.0.window.has_css_class("isle-mode-assistant");
         let (cur_w, cur_h, _, _) = self.current_geometry();
 
-        let (target_w, target_h, target_r, target_sh) = if is_expanded {
+        let (target_w, target_h, target_r, target_sh) = if self.0.window.has_css_class("isle-mode-alarm-alert") {
+            (
+                ALARM_ALERT_WIDTH,
+                ALARM_ALERT_HEIGHT,
+                ALARM_ALERT_RADIUS,
+                COMPACT_SHOULDER,
+            )
+        } else if is_expanded {
             if is_asst {
                 (
                     ASSISTANT_EXPANDED_WIDTH,

@@ -80,7 +80,7 @@ fn read(path: impl AsRef<Path>) -> Option<String> {
     (!value.is_empty()).then_some(value)
 }
 
-/// "Ubuntu 24.04.5 LTS, GNOME, on a <vendor> <model>".
+/// "Ubuntu 24.04.5 LTS, XFCE (X11), on a <vendor> <model>".
 fn system() -> String {
     let os = read("/etc/os-release")
         .and_then(|release| {
@@ -95,10 +95,28 @@ fn system() -> String {
         .filter_map(|name| read(format!("/sys/class/dmi/id/{name}")))
         .collect::<Vec<_>>()
         .join(" ");
+
+    let de = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
+    let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_default();
+    let desktop = match (de.is_empty(), session.is_empty()) {
+        (false, false) => {
+            let session_label = if session.eq_ignore_ascii_case("x11") {
+                "X11".to_string()
+            } else if session.eq_ignore_ascii_case("wayland") {
+                "Wayland".to_string()
+            } else {
+                session
+            };
+            format!("{de} ({session_label})")
+        }
+        (false, true) => format!("{de} (X11)"),
+        _ => "XFCE (X11)".to_string(),
+    };
+
     if machine.is_empty() {
-        format!("{os}, GNOME")
+        format!("{os}, {desktop}")
     } else {
-        format!("{os}, GNOME, on a {machine}")
+        format!("{os}, {desktop}, on a {machine}")
     }
 }
 

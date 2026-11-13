@@ -12,7 +12,7 @@ import Pango from 'gi://Pango';
 
 import * as Format from './format.js';
 import * as Playback from './playback.js';
-import { Bars, BotIcon, PrivacyDots, Ring, icon, label } from './widgets.js';
+import { Bars, BotIcon, PrivacyDots, Ring, icon, label, pillButton } from './widgets.js';
 
 export const CompactView = GObject.registerClass({
     GTypeName: 'IsleGtkCompactView',
@@ -38,6 +38,8 @@ export const CompactView = GObject.registerClass({
             transition_duration: 180,
             valign: Gtk.Align.CENTER,
             halign: Gtk.Align.CENTER,
+            hhomogeneous: false,
+            vhomogeneous: false,
         });
         this.append(this._stack);
 
@@ -161,6 +163,78 @@ export const CompactView = GObject.registerClass({
         this._peekRow.append(this._peekTime);
 
         this._stack.add_named(this._peekRow, 'peek');
+
+        // ── 3. Alarm / Timer Ringing Alert View (Double-height Dynamic Island) ────────
+        this._alarmBox = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 6,
+            valign: Gtk.Align.CENTER,
+            halign: Gtk.Align.FILL,
+            hexpand: true,
+            css_classes: ['isle-compact-alarm-alert'],
+        });
+
+        // Top Row: Icon + Title + Pulse indicator
+        const alarmTopRow = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 8,
+            valign: Gtk.Align.CENTER,
+            halign: Gtk.Align.FILL,
+        });
+
+        this._alarmAlertIcon = new Gtk.Image({
+            gicon: icon('isle-timer'),
+            pixel_size: 16,
+        });
+        alarmTopRow.append(this._alarmAlertIcon);
+
+        this._alarmAlertTitle = label('Timer Done', 'isle-compact-peek-title', {
+            hexpand: true,
+            halign: Gtk.Align.START,
+        });
+        alarmTopRow.append(this._alarmAlertTitle);
+
+        const pulseDot = new Gtk.Box({
+            css_classes: ['isle-unseen-dot'],
+            valign: Gtk.Align.CENTER,
+        });
+        alarmTopRow.append(pulseDot);
+        this._alarmBox.append(alarmTopRow);
+
+        // Bottom Row: [Dismiss] (left) | Time (center) | [Snooze] (right)
+        const alarmBottomRow = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 12,
+            valign: Gtk.Align.CENTER,
+            halign: Gtk.Align.FILL,
+        });
+
+        this._alarmDismissBtn = pillButton('Dismiss', 'isle-pill-small', () => {
+            print('[Isle Alarm] Dismiss button clicked');
+            this._endAlarmAlert();
+            if (this._onAlarmDismiss) this._onAlarmDismiss();
+        });
+        this._alarmDismissBtn.set_hexpand(false);
+        alarmBottomRow.append(this._alarmDismissBtn);
+
+        this._alarmAlertTime = label('00:00', 'isle-compact-alarm-time', {
+            hexpand: true,
+            halign: Gtk.Align.CENTER,
+            valign: Gtk.Align.CENTER,
+        });
+        alarmBottomRow.append(this._alarmAlertTime);
+
+        this._alarmSnoozeBtn = pillButton('Snooze', 'isle-pill-accent isle-pill-small', () => {
+            print('[Isle Alarm] Snooze button clicked');
+            this._endAlarmAlert();
+            if (this._onAlarmSnooze) this._onAlarmSnooze();
+        });
+        this._alarmSnoozeBtn.set_hexpand(false);
+        alarmBottomRow.append(this._alarmSnoozeBtn);
+
+        this._alarmBox.append(alarmBottomRow);
+        this._stack.add_named(this._alarmBox, 'alarm');
+
         this._stack.set_visible_child_name('main');
 
         // Click Gesture: click on peek immediately opens notifications tab
@@ -236,6 +310,35 @@ export const CompactView = GObject.registerClass({
             this._endPeek();
             return GLib.SOURCE_REMOVE;
         });
+    }
+
+    showAlarmAlert({ type = 'timer', timeStr = '00:00', labelText = "Time's Up!", onDismiss = null, onSnooze = null }) {
+        this._onAlarmDismiss = onDismiss;
+        this._onAlarmSnooze = onSnooze;
+
+        this._alarmAlertTitle.set_text(labelText);
+        this._alarmAlertTime.set_text(timeStr);
+        this._alarmAlertIcon.set_from_gicon(icon(type === 'alarm' ? 'isle-bell' : 'isle-timer'));
+
+        this._isAlarmAlert = true;
+        this._stack.set_visible_child_name('alarm');
+
+        const win = this.get_root();
+        if (win) {
+            win.remove_css_class('isle-mode-peek');
+            if (!win.has_css_class('isle-mode-alarm-alert')) {
+                win.add_css_class('isle-mode-alarm-alert');
+            }
+        }
+    }
+
+    _endAlarmAlert() {
+        this._isAlarmAlert = false;
+        this._stack.set_visible_child_name('main');
+        const win = this.get_root();
+        if (win && win.has_css_class('isle-mode-alarm-alert')) {
+            win.remove_css_class('isle-mode-alarm-alert');
+        }
     }
 
     _endPeek() {

@@ -725,8 +725,28 @@ impl Session {
         } else {
             "show the user's notifications"
         };
+        let current_de = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_else(|_| "XFCE".into());
+        let is_xfce = current_de.is_empty() || current_de.to_uppercase().contains("XFCE");
+        let de_name = if is_xfce {
+            "XFCE"
+        } else {
+            &current_de
+        };
+        let desktop_desc = format!("Linux ({de_name}) desktop");
+        let settings_guide = if is_xfce {
+            "open XFCE Settings (xfce4-settings-manager) at wifi, bluetooth, display, sound, power, background, \
+             network, keyboard, mouse, printers, notifications, privacy, applications or system"
+        } else {
+            "open GNOME Settings at wifi, bluetooth, display, sound, power, background, \
+             network, keyboard, mouse, printers, notifications, privacy, applications or system"
+        };
+        let ext_guide = if is_xfce {
+            "xfconf-query -l, xfce4-settings-manager"
+        } else {
+            "gnome-extensions list --enabled"
+        };
         format!(
-            "You are Isle, the assistant built into the top bar of the user's Linux (GNOME) desktop: as capable \
+            "You are Isle, the assistant built into the top bar of the user's {desktop_desc}: as capable \
              as an expert who knows Linux, this computer and the world inside out, and as easy to talk to as a \
              good friend. You can talk things through, research, find out what is wrong with this computer and \
              fix it, install software, and do things on the desktop. Typed or spoken (speech recognition may \
@@ -794,8 +814,7 @@ impl Session {
              - volume {{level: 0-100}} or {{command: up | down | mute | unmute}}: the sound\n\
              - wifi {{on}}, bluetooth {{on}}, dnd {{on}}: turn Wi-Fi, Bluetooth or Do Not Disturb on or off\n\
              - notifications: {notifications}\n\
-             - settings {{panel}}: open GNOME Settings at wifi, bluetooth, display, sound, power, background, \
-             network, keyboard, mouse, printers, notifications, privacy, applications or system\n\
+             - settings {{panel}}: {settings_guide}\n\
              - close_app {{app}}: quit an open app by its name\n\
              - open_folder {{path}}: open a folder in Files, e.g. \"~/Downloads\" or \"~/Documents/Projects\"\n\
              - brightness {{level: 0-100}} or {{command: up | down}}: the screen's brightness\n\
@@ -848,8 +867,8 @@ impl Session {
                hardware and drivers: lspci -k, lsusb, lsmod, modinfo x, inxi -Fxz, lshw -short, glxinfo -B, \
              vulkaninfo --summary, nvidia-smi, ubuntu-drivers devices, prime-select query, mokutil --sb-state, \
              fwupdmgr get-devices\n\
-               settings: gsettings get schema key, gsettings list-recursively schema, gnome-extensions list \
-             --enabled, xdg-settings get default-web-browser\n\
+               settings: gsettings get schema key, gsettings list-recursively schema, {ext_guide}, \
+             xdg-settings get default-web-browser\n\
                software: command -v x, dpkg -s x, rpm -q x, apt-cache policy x, apt list --upgradable, dnf info \
              x, flatpak list, flatpak search x, snap list, snap info x, npm view x version, pip list, x --version\n\
              Anything else is refused and comes back saying what does work: then use one of those, never tell \

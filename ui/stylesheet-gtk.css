@@ -168,6 +168,10 @@ button.isle-button, button.isle-pill, button.isle-tab, button.isle-corner-close 
 
 /* ── Compact ──────────────────────────────────────────── */
 
+.isle-compact-row {
+  padding: 0 10px;
+}
+
 /* Each side's padding toward the clock is its gap to it; compact.js makes both sides as wide, and sets
  * the room at the ends from the island's height. */
 .isle-compact-start { padding-right: 30px; }
@@ -1804,3 +1808,120 @@ button.isle-button, button.isle-pill, button.isle-tab, button.isle-corner-close 
 #isleIsland.isle-glass-dark .isle-mode-toggle.on,
 #isleIsland.isle-glass-dark .isle-cal-world-toggle:checked,
 #isleIsland.isle-glass-dark .isle-dnd-toggle:checked { box-shadow: none; }
+
+/* ── Timer Multi-Mode & Stopwatch / Alarm ─────────────── */
+.isle-timer-subnav {
+  padding-bottom: 4px;
+}
+.isle-timer-modes-box {
+  background-color: rgba(255, 255, 255, 0.06);
+  border-radius: 999px;
+  padding: 2px;
+}
+.isle-timer-mode-btn {
+  padding: 3px 12px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.65);
+  background-color: transparent;
+  transition-duration: 120ms;
+}
+.isle-timer-mode-btn:hover {
+  color: #ffffff;
+  background-color: rgba(255, 255, 255, 0.1);
+}
+.isle-timer-mode-btn.active {
+  color: #ffffff;
+  background-color: rgba(255, 255, 255, 0.18);
+}
+.isle-stopwatch-layout {
+}
+.isle-stopwatch-display {
+  font-size: 32px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  font-feature-settings: "tnum";
+}
+.isle-stopwatch-ms {
+  font-size: 18px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.6);
+  font-feature-settings: "tnum";
+}
+.isle-lap-scroll {
+  min-width: 140px;
+}
+.isle-lap-row {
+  padding: 2px 8px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.7);
+  font-feature-settings: "tnum";
+}
+.isle-alarm-layout {
+}
+.isle-alarm-time-display {
+  font-size: 34px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  font-feature-settings: "tnum";
+}
+.isle-alarm-hint {
+  font-size: 12px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.55);
+}
+.isle-alarm-preset {
+  font-size: 11px;
+  padding: 3px 8px;
+}
+
+/* ── Compact Alarm Alert (Double Height Notch) ── */
+.isle-compact-alarm-alert {
+  padding: 6px 14px 8px 14px;
+}
+.isle-compact-alarm-time {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.3px;
+  font-feature-settings: "tnum";
+}
+
+/* ── Full Panel Ringing Overlay (Blanking Open Panel) ── */
+.isle-alarm-overlay {
+  background-color: rgba(10, 12, 16, 0.96);
+  padding: 24px;
+}
+.isle-alarm-overlay-time {
+  font-size: 48px;
+  font-weight: 800;
+  letter-spacing: -1px;
+  font-feature-settings: "tnum";
+}
+.isle-alarm-overlay-hint {
+  font-size: 15px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.7);
+}
+.isle-alarm-overlay-btn {
+  font-size: 14px;
+  font-weight: 600;
+  padding: 8px 24px;
+  border-radius: 999px;
+}
+
+/* ── Isle Settings Page ── */
+.isle-settings-card {
+  background-color: rgba(44, 44, 46, 0.65);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 10px;
+  padding: 6px 12px;
+}
+.isle-settings-scale highlight {
+  background-color: #0a84ff;
+  border-radius: 999px;
+}
+.isle-header-settings.active {
+  opacity: 1.0;
+  color: #0a84ff;
+}

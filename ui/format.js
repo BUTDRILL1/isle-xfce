@@ -17,6 +17,10 @@ export function setClockFormat(format) {
     clockFormat = format;
 }
 
+export function getClockFormat() {
+    return clockFormat;
+}
+
 export function uses12Hour() {
     if (clockFormat === '24h' || clockFormat === '12h')
         return clockFormat === '12h';
@@ -74,6 +78,16 @@ export function ago(dateTime) {
     if (minutes < 24 * 60)
         return `${Math.floor(minutes / 60)}h`;
     return dateTime.format(minutes < 6 * 24 * 60 ? '%a' : '%-d %b');
+}
+
+/** "Tue 20 Oct", short and calm in the top bar. */
+export function longDate(dateTime = GLib.DateTime.new_now_local()) {
+    return dateTime.format('%a %-d %b') || '';
+}
+
+/** "Tue 20", beside the closed island's clock. */
+export function shortDate(dateTime = GLib.DateTime.new_now_local()) {
+    return dateTime.format('%a %-d') || '';
 }
 
 export function nowMs() {

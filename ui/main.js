@@ -23,6 +23,7 @@ import { ShelfPage } from './pages/shelf.js';
 import { TasksPage } from './pages/tasks.js';
 import { TimerPage } from './pages/timer.js';
 import { UsagePage } from './pages/usage.js';
+import * as Format from './format.js';
 
 export function init() {
     print('[Isle GJS] Initializing Isle UI Frontend with D-Bus Daemon Integration...');
@@ -128,9 +129,86 @@ export function init() {
         compactView.showNotificationPeek(notification);
     });
 
+    // 6. Settings persistence and Glass Opacity control
+    const settingsDir = GLib.build_filenamev([GLib.get_user_config_dir(), 'isle']);
+    const settingsPath = GLib.build_filenamev([settingsDir, 'settings.json']);
+    
+    let currentGlassOpacity = 15;
+    globalThis.isleSoundEnabled = true;
+
+    const loadSettings = () => {
+        try {
+            const f = Gio.File.new_for_path(settingsPath);
+            if (f.query_exists(null)) {
+                const [ok, contents] = f.load_contents(null);
+                if (ok) {
+                    const data = JSON.parse(new TextDecoder().decode(contents));
+                    if (data.glassOpacity !== undefined) currentGlassOpacity = data.glassOpacity;
+                    if (data.clockFormat) Format.setClockFormat(data.clockFormat);
+                    if (data.soundEnabled !== undefined) globalThis.isleSoundEnabled = Boolean(data.soundEnabled);
+                }
+            }
+        } catch (e) {
+            print('[Isle] Could not load settings:', e.message);
+        }
+    };
+
+    const saveSettings = () => {
+        try {
+            GLib.mkdir_with_parents(settingsDir, 0o755);
+            const data = {
+                glassOpacity: currentGlassOpacity,
+                clockFormat: Format.uses12Hour() ? '12h' : '24h',
+                soundEnabled: globalThis.isleSoundEnabled !== false,
+            };
+            const f = Gio.File.new_for_path(settingsPath);
+            f.replace_contents(JSON.stringify(data, null, 2), null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
+        } catch (e) {
+            print('[Isle] Could not save settings:', e.message);
+        }
+    };
+    globalThis.isleSaveSettings = saveSettings;
+
+    const glassProvider = new Gtk.CssProvider();
+    Gtk.StyleContext.add_provider_for_display(win.get_display(), glassProvider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 20);
+
+    const glArea = overlay.get_child();
+
+    globalThis.isleSetGlassOpacity = (percent) => {
+        currentGlassOpacity = percent;
+        saveSettings();
+        const val = percent > 1 ? percent / 100.0 : percent;
+        if (glArea && glArea.set_opacity) {
+            glArea.set_opacity(Math.min(1.0, val / 0.15));
+        }
+        glassProvider.load_from_string(`
+            .isle-overlay {
+                background-color: rgba(20, 20, 22, ${val.toFixed(2)});
+            }
+        `);
+    };
+    globalThis.isleGetGlassOpacity = () => currentGlassOpacity;
+
+    loadSettings();
+    globalThis.isleSetGlassOpacity(currentGlassOpacity);
+
+    // Connect settings gear from header
+    expandedView.connect('settings-requested', () => {
+        expandedView.toggleSettings();
+    });
+
     // Expose for runtime inspection and testing
     globalThis.isleExpanded = expandedView;
     globalThis.isleCompact = compactView;
+
+    // Global Alarm / Timer Ringing Alert dispatcher (dispatches to expanded or compact based on open state)
+    globalThis.isleShowAlert = (alert) => {
+        if (lastExpanded) {
+            expandedView.showAlarmOverlay(alert);
+        } else {
+            compactView.showAlarmAlert(alert);
+        }
+    };
 
     overlay.add_overlay(compactView);
     overlay.add_overlay(expandedView);
@@ -169,7 +247,11 @@ export function init() {
                     print(`[Isle GJS IPC] Switching to requested tab: ${tabName}`);
                     win.add_css_class('isle-force-expand');
                     updateVisibility(true);
-                    expandedView.showPage(tabName);
+                    if (tabName === 'settings') {
+                        expandedView.toggleSettings(true);
+                    } else {
+                        expandedView.showPage(tabName);
+                    }
                 }
             }
 
@@ -219,6 +301,67 @@ export function init() {
                     }
                 }
             }
+
+            const fSettings = Gio.File.new_for_path('/tmp/isle_settings');
+            if (fSettings.query_exists(null)) {
+                const [ok, contents] = fSettings.load_contents(null);
+                if (ok) {
+                    const cmd = new TextDecoder().decode(contents).trim();
+                    fSettings.delete(null);
+                    print(`[Isle GJS IPC] Settings command: ${cmd}`);
+                    if (cmd === 'open') {
+                        win.add_css_class('isle-force-expand');
+                        updateVisibility(true);
+                        expandedView.toggleSettings(true);
+                    } else if (cmd === 'toggle') {
+                        if (expandedView.isSettingsOpen) {
+                            expandedView.toggleSettings(false);
+                        } else {
+                            win.add_css_class('isle-force-expand');
+                            updateVisibility(true);
+                            expandedView.toggleSettings(true);
+                        }
+                    } else if (cmd === 'close') {
+                        expandedView.toggleSettings(false);
+                    }
+                }
+            }
+
+            const fAlert = Gio.File.new_for_path('/tmp/isle_test_alert');
+            if (fAlert.query_exists(null)) {
+                const [ok, contents] = fAlert.load_contents(null);
+                if (ok) {
+                    const mode = new TextDecoder().decode(contents).trim();
+                    fAlert.delete(null);
+                    if (mode === 'open') {
+                        win.add_css_class('isle-force-expand');
+                        updateVisibility(true);
+                        expandedView.showAlarmOverlay({
+                            type: 'timer',
+                            timeStr: '00:00',
+                            labelText: "Timer Done!",
+                            onDismiss: () => {
+                                print('[Test] Dismissed open overlay');
+                                win.remove_css_class('isle-force-expand');
+                            },
+                            onSnooze: () => {
+                                print('[Test] Snoozed open overlay');
+                                win.remove_css_class('isle-force-expand');
+                            },
+                        });
+                    } else {
+                        win.remove_css_class('isle-force-expand');
+                        updateVisibility(false);
+                        compactView.showAlarmAlert({
+                            type: 'alarm',
+                            timeStr: '07:00',
+                            labelText: 'Morning Alarm',
+                            onDismiss: () => print('[Test] Dismissed compact alert'),
+                            onSnooze: () => print('[Test] Snoozed compact alert'),
+                        });
+                    }
+                }
+            }
         } catch (e) {
             print('[Isle IPC ERROR]', e);
         }
@@ -228,7 +371,7 @@ export function init() {
     // Synchronize visibility with live window geometry and spring animations on each GTK tick
     win.add_tick_callback(() => {
         const height = win.get_height();
-        updateVisibility(height > 80);
+        updateVisibility(height > 150);
         return GLib.SOURCE_CONTINUE;
     });
 

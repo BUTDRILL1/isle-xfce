@@ -51,6 +51,8 @@ pub struct Battery {
     /// Connected to power, whether or not it is currently charging.
     pub plugged: bool,
     pub charging: bool,
+    pub time_to_empty: Option<i64>,
+    pub time_to_full: Option<i64>,
 }
 
 /// NetworkManager's primary connection.

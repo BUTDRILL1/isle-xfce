@@ -12,6 +12,7 @@ import Pango from 'gi://Pango';
 
 import { Slider, deviceIcon, icon, iconButton, label, setButtonIcon } from '../widgets.js';
 import { Page } from '../page.js';
+import { getTelemetryMonitor, getBatteryTelemetry, sampleNetworkThroughput } from '../telemetry.js';
 
 function runCommandAsync(argv) {
     try {
@@ -68,6 +69,9 @@ export const DevicesPage = GObject.registerClass({
         this.watch(['system'], () => this._update());
         this._update();
         this._refreshAudio();
+
+        this._monitor = getTelemetryMonitor();
+        this._monitorHandler = this._monitor.connect('updated', () => this._updateLiveTelemetry());
     }
 
     get available() {
@@ -262,25 +266,59 @@ export const DevicesPage = GObject.registerClass({
         runCommandAsync(['wpctl', 'set-mute', '@DEFAULT_AUDIO_SOURCE@', 'toggle']);
     }
 
+    _updateLiveTelemetry() {
+        const sys = this.daemon?.state?.system ?? {};
+
+        // Live battery telemetry update
+        if (this._batteryPercentLbl) {
+            const batInfo = getBatteryTelemetry(sys.battery);
+            if (batInfo) {
+                this._batteryPercentLbl.set_text(batInfo.fullText);
+                const status = batInfo.isCharging ? 'Charging' : (batInfo.isPlugged ? 'Plugged in' : 'Battery');
+                this._batteryStatusLbl.set_text(status);
+                const iconName = batInfo.percent <= 20 ? 'isle-battery-low-symbolic' : 'isle-battery-symbolic';
+                this._batteryIcon.set_from_gicon(icon(iconName));
+            }
+        }
+
+        // Live network throughput update
+        if (this._netStatusLbl) {
+            const net = sys.network;
+            const connected = Boolean(net?.connected);
+            const netSpeed = sampleNetworkThroughput();
+            this._netStatusLbl.set_text(connected ? netSpeed.formatted : 'Disconnected');
+        }
+    }
+
     _update() {
         const sys = this.daemon?.state?.system ?? {};
 
         // Battery update
         if (sys.battery) {
-            const pct = Math.round(sys.battery.percent || 0);
-            this._batteryPercentLbl.set_text(`${pct}%`);
-            const status = sys.battery.charging ? 'Charging' : (sys.battery.plugged ? 'Plugged in' : 'On battery');
-            this._batteryStatusLbl.set_text(status);
-            const iconName = pct <= 20 ? 'isle-battery-low-symbolic' : 'isle-battery-symbolic';
-            this._batteryIcon.set_from_gicon(icon(iconName));
+            const batInfo = getBatteryTelemetry(sys.battery);
+            if (batInfo) {
+                this._batteryPercentLbl.set_text(batInfo.fullText);
+                const status = batInfo.isCharging ? 'Charging' : (batInfo.isPlugged ? 'Plugged in' : 'Battery');
+                this._batteryStatusLbl.set_text(status);
+                const iconName = batInfo.percent <= 20 ? 'isle-battery-low-symbolic' : 'isle-battery-symbolic';
+                this._batteryIcon.set_from_gicon(icon(iconName));
+            } else {
+                const pct = Math.round(sys.battery.percent || 0);
+                this._batteryPercentLbl.set_text(`${pct}%`);
+                const status = sys.battery.charging ? 'Charging' : (sys.battery.plugged ? 'Plugged in' : 'On battery');
+                this._batteryStatusLbl.set_text(status);
+                const iconName = pct <= 20 ? 'isle-battery-low-symbolic' : 'isle-battery-symbolic';
+                this._batteryIcon.set_from_gicon(icon(iconName));
+            }
         }
 
         // Network update
         if (sys.network) {
             const net = sys.network;
             const connected = Boolean(net.connected);
+            const netSpeed = sampleNetworkThroughput();
             this._netNameLbl.set_text(net.name || (connected ? 'Connected' : 'Offline'));
-            this._netStatusLbl.set_text(connected ? (net.connection || 'Active') : 'Disconnected');
+            this._netStatusLbl.set_text(connected ? netSpeed.formatted : 'Disconnected');
             const iconName = connected ? 'isle-wifi-symbolic' : 'isle-wifi-off-symbolic';
             this._netIcon.set_from_gicon(icon(iconName));
         }

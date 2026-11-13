@@ -2254,8 +2254,8 @@ mod tests {
             album: String::new(),
             length_s,
         };
-        // Until the extension says, nothing is looked up.
-        assert_eq!(lyrics_step(None, &query(216.0), false), LyricsStep::Wait);
+        // Online lyrics are enabled by default even if the extension has not set it yet.
+        assert_eq!(lyrics_step(None, &query(216.0), false), LyricsStep::Fetch);
         assert_eq!(
             lyrics_step(Some(false), &query(216.0), false),
             LyricsStep::Off
