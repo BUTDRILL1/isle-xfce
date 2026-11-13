@@ -1287,11 +1287,17 @@ progressbar.isle-usage-track.warn progress { background-color: #ff9f0a; }
 progressbar.isle-usage-track.crit progress { background-color: #ff453a; }
 .isle-usage-mark-live { background-color: #30d158; min-width: 8px; min-height: 8px; border-radius: 4px; }
 .isle-power-row { margin-top: 2px; padding-top: 6px; border-top: 1px solid rgba(255, 255, 255, 0.08); }
-.isle-power-option { font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 10px; min-height: 22px; background-color: rgba(255, 255, 255, 0.06); color: rgba(255, 255, 255, 0.65); }
-.isle-power-option:hover { background-color: rgba(255, 255, 255, 0.12); color: #ffffff; }
-.isle-power-saver { background-color: rgba(48, 209, 88, 0.22); color: #30d158; }
-.isle-power-balanced { background-color: rgba(10, 132, 255, 0.22); color: #5ac8fa; }
-.isle-power-perf { background-color: rgba(255, 159, 10, 0.22); color: #ff9f0a; }
+.isle-power-icon-btn { min-width: 30px; min-height: 26px; padding: 3px 8px; border-radius: 13px; background-color: rgba(255, 255, 255, 0.05); opacity: 0.6; transition: 150ms ease; }
+.isle-power-icon-btn:hover { background-color: rgba(255, 255, 255, 0.12); opacity: 0.95; }
+.isle-power-icon-btn.active { opacity: 1.0; }
+.isle-power-saver { color: #ffd60a; }
+.isle-power-saver.active { background-color: rgba(255, 214, 10, 0.22); }
+.isle-power-balanced { color: #30d158; }
+.isle-power-balanced.active { background-color: rgba(48, 209, 88, 0.22); }
+.isle-power-perf { color: #ff453a; }
+.isle-power-perf.active { background-color: rgba(255, 69, 58, 0.22); }
+.isle-power-lightning { color: #bf5af2; }
+.isle-power-lightning.active { background-color: rgba(191, 90, 242, 0.24); }
 .isle-usage-fill { min-height: 5px; border-radius: 3px; }
 .isle-usage-fill.critical { background-color: #ff453a; }
 .isle-usage-empty { font-size: 12px; color: rgba(255, 255, 255, 0.55); }

@@ -345,7 +345,60 @@ export function getDiskUsage() {
     }
 }
 
+export function isAcPluggedIn() {
+    try {
+        const psDir = Gio.File.new_for_path('/sys/class/power_supply');
+        if (!psDir.query_exists(null)) return false;
+        const iter = psDir.enumerate_children('standard::name', Gio.FileQueryInfoFlags.NONE, null);
+        let info;
+        while ((info = iter.next_file(null)) !== null) {
+            const name = info.get_name();
+            if (!name.startsWith('AC') && !name.startsWith('ADP')) continue;
+            try {
+                const [ok, data] = GLib.file_get_contents(`/sys/class/power_supply/${name}/online`);
+                if (ok && new TextDecoder().decode(data).trim() === '1') {
+                    return true;
+                }
+            } catch (_) {}
+        }
+    } catch (_) {}
+    return false;
+}
+
+export function isLightningActive() {
+    try {
+        const [okGov, govData] = GLib.file_get_contents('/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor');
+        const gov = okGov ? new TextDecoder().decode(govData).trim() : '';
+        if (gov !== 'performance') return false;
+
+        // Also check GPU DPM if present
+        const drmDir = Gio.File.new_for_path('/sys/class/drm');
+        if (drmDir.query_exists(null)) {
+            const iter = drmDir.enumerate_children('standard::name', Gio.FileQueryInfoFlags.NONE, null);
+            let info;
+            while ((info = iter.next_file(null)) !== null) {
+                const name = info.get_name();
+                if (!/^card\d+$/.test(name)) continue;
+                const dpmPath = `/sys/class/drm/${name}/device/power_dpm_force_performance_level`;
+                try {
+                    const [okDpm, dpmData] = GLib.file_get_contents(dpmPath);
+                    if (okDpm && new TextDecoder().decode(dpmData).trim() === 'high') {
+                        return true;
+                    }
+                } catch (_) {}
+            }
+        }
+        return true;
+    } catch (_) {
+        return false;
+    }
+}
+
 export function getPowerProfile() {
+    if (isLightningActive()) {
+        return 'lightning';
+    }
+
     // 1. Check powerprofilesctl if available
     if (GLib.find_program_in_path('powerprofilesctl')) {
         try {
@@ -381,7 +434,102 @@ export function getPowerProfile() {
     return 'balanced';
 }
 
+function _runArgvPrivileged(argv, requirePrompt, onComplete) {
+    if (!requirePrompt) {
+        try {
+            const proc = Gio.Subprocess.new(['sudo', '-n', ...argv], Gio.SubprocessFlags.NONE);
+            proc.wait_check_async(null, (_p, res) => {
+                try {
+                    if (proc.wait_check_finish(res)) {
+                        if (onComplete) onComplete(true);
+                        return;
+                    }
+                } catch (_) {}
+                _runArgvPrivileged(argv, true, onComplete);
+            });
+            return;
+        } catch (_) {}
+    }
+
+    try {
+        const proc = Gio.Subprocess.new(['pkexec', ...argv], Gio.SubprocessFlags.NONE);
+        proc.wait_check_async(null, (_p, res) => {
+            let ok = false;
+            try { ok = proc.wait_check_finish(res); } catch (_) {}
+            if (onComplete) onComplete(ok);
+        });
+    } catch (_) {
+        if (onComplete) onComplete(false);
+    }
+}
+
+function isSaverExtraActive() {
+    try {
+        const [ok, data] = GLib.file_get_contents('/sys/devices/system/cpu/cpufreq/boost');
+        return ok && new TextDecoder().decode(data).trim() === '0';
+    } catch (_) {
+        return false;
+    }
+}
+
+function _notifyPowerChanged(profile, onDone) {
+    if (_serviceInstance) {
+        _serviceInstance.emit('power-changed');
+    }
+    if (onDone) onDone(profile);
+}
+
 export function setPowerProfile(profile, onDone = null) {
+    const helper = GLib.file_test('/usr/local/bin/isle-lightning', GLib.FileTest.IS_EXECUTABLE)
+        ? '/usr/local/bin/isle-lightning'
+        : null;
+
+    if (profile === 'lightning') {
+        if (GLib.find_program_in_path('powerprofilesctl')) {
+            try {
+                Gio.Subprocess.new(['powerprofilesctl', 'set', 'performance'], Gio.SubprocessFlags.NONE);
+            } catch (_) {}
+        }
+        const argv = helper
+            ? [helper, 'on']
+            : ['sh', '-c', 'for f in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo performance > "$f"; done; echo 1 > /sys/devices/system/cpu/cpufreq/boost 2>/dev/null || true; for g in /sys/class/drm/card*/device/power_dpm_force_performance_level; do echo high > "$g" 2>/dev/null || true; done'];
+        // Require auth when unplugged on battery; allow passwordless when plugged in
+        const requirePrompt = !isAcPluggedIn();
+        _runArgvPrivileged(argv, requirePrompt, () => {
+            _notifyPowerChanged(getPowerProfile(), onDone);
+        });
+        return;
+    }
+
+    if (profile === 'power-saver') {
+        const applySaver = () => {
+            if (helper) {
+                _runArgvPrivileged([helper, 'saver'], false, () => {
+                    _notifyPowerChanged(getPowerProfile(), onDone);
+                });
+            } else {
+                _notifyPowerChanged(getPowerProfile(), onDone);
+            }
+        };
+        _applyStandardProfile('power-saver', applySaver);
+        return;
+    }
+
+    // Leaving lightning or super-saver: restore governor=powersave, boost=1, GPU DPM=auto
+    if (isLightningActive() || isSaverExtraActive()) {
+        const argv = helper
+            ? [helper, 'off']
+            : ['sh', '-c', 'for f in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo powersave > "$f"; done; echo 1 > /sys/devices/system/cpu/cpufreq/boost 2>/dev/null || true; for g in /sys/class/drm/card*/device/power_dpm_force_performance_level; do echo auto > "$g" 2>/dev/null || true; done'];
+        _runArgvPrivileged(argv, false, () => {
+            _applyStandardProfile(profile, p => _notifyPowerChanged(p, onDone));
+        });
+        return;
+    }
+
+    _applyStandardProfile(profile, p => _notifyPowerChanged(p, onDone));
+}
+
+function _applyStandardProfile(profile, onDone) {
     if (GLib.find_program_in_path('powerprofilesctl')) {
         try {
             const proc = Gio.Subprocess.new(['powerprofilesctl', 'set', profile], Gio.SubprocessFlags.NONE);
@@ -399,29 +547,37 @@ export function setPowerProfile(profile, onDone = null) {
     };
     const epp = eppMap[profile] || 'balance_performance';
     const cmd = `for f in /sys/devices/system/cpu/cpu*/cpufreq/energy_performance_preference; do echo ${epp} > "$f"; done`;
-    try {
-        const proc = Gio.Subprocess.new(['pkexec', 'sh', '-c', cmd], Gio.SubprocessFlags.NONE);
-        proc.wait_async(null, () => {
-            if (onDone) onDone(getPowerProfile());
-        });
-    } catch (_) {
+    _runArgvPrivileged(['sh', '-c', cmd], true, () => {
         if (onDone) onDone(getPowerProfile());
-    }
+    });
 }
 
 export const TelemetryMonitor = GObject.registerClass({
     GTypeName: 'IsleTelemetryMonitorService',
     Signals: {
         'updated': {},
+        'power-changed': {},
     },
 }, class extends GObject.Object {
     _init() {
         super._init();
         sampleNetworkThroughput();
         sampleCpuUsage();
+        this._lastAcPlugged = isAcPluggedIn();
+        // If already plugged in at startup and currently balanced, switch to performance
+        if (this._lastAcPlugged && getPowerProfile() === 'balanced') {
+            setPowerProfile('performance', () => this.emit('power-changed'));
+        }
         this._timerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
             sampleNetworkThroughput();
             sampleCpuUsage();
+            const ac = isAcPluggedIn();
+            if (ac !== this._lastAcPlugged) {
+                this._lastAcPlugged = ac;
+                setPowerProfile(ac ? 'performance' : 'balanced', () => {
+                    this.emit('power-changed');
+                });
+            }
             this.emit('updated');
             return GLib.SOURCE_CONTINUE;
         });

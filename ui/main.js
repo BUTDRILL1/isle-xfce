@@ -12,6 +12,7 @@ import Gtk from 'gi://Gtk?version=4.0';
 import { CompactView } from './compact.js';
 import { Daemon } from './daemon.js';
 import { ExpandedView } from './expanded.js';
+import { LightningOverlay } from './lightning.js';
 import { Page } from './page.js';
 import { NotificationCenter } from './notifications.js';
 import { AppsPage } from './pages/apps.js';
@@ -216,6 +217,8 @@ export function init() {
         }
     };
 
+    const lightningOverlay = new LightningOverlay();
+    overlay.add_overlay(lightningOverlay);
     overlay.add_overlay(compactView);
     overlay.add_overlay(expandedView);
 

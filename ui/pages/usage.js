@@ -9,7 +9,7 @@ import GObject from 'gi://GObject';
 import Gtk from 'gi://Gtk?version=4.0';
 import Pango from 'gi://Pango';
 
-import { icon, label, pillButton } from '../widgets.js';
+import { icon, iconButton, label, pillButton } from '../widgets.js';
 import { Page } from '../page.js';
 import {
     getTelemetryMonitor,
@@ -54,6 +54,10 @@ export const UsagePage = GObject.registerClass({
 
         this._monitor = getTelemetryMonitor();
         this._monitorHandler = this._monitor.connect('updated', () => this._updateLiveTelemetry());
+        this._powerHandler = this._monitor.connect('power-changed', () => {
+            this._powerProfile = getPowerProfile();
+            this._applyPowerStyle(this._powerProfile);
+        });
     }
 
     getDesiredHeight() {
@@ -300,14 +304,16 @@ export const UsagePage = GObject.registerClass({
         });
         this._powerPills = {};
         const profiles = [
-            { id: 'power-saver', text: 'Power Saver' },
-            { id: 'balanced', text: 'Balanced' },
-            { id: 'performance', text: 'Performance' },
+            { id: 'power-saver', iconName: 'isle-power-saver-symbolic', tip: 'Power Saver (Boost Off, GPU Low)', cls: 'isle-power-saver' },
+            { id: 'balanced', iconName: 'isle-power-balanced-symbolic', tip: 'Balanced', cls: 'isle-power-balanced' },
+            { id: 'performance', iconName: 'isle-power-perf-symbolic', tip: 'Performance', cls: 'isle-power-perf' },
+            { id: 'lightning', iconName: 'isle-power-lightning-symbolic', tip: 'Lightning (Max CPU/GPU)', cls: 'isle-power-lightning' },
         ];
         for (const p of profiles) {
-            const btn = pillButton(p.text, 'isle-pill-small isle-power-option', () => {
+            const btn = iconButton(p.iconName, `isle-power-icon-btn ${p.cls}`, () => {
                 this._selectPowerProfile(p.id);
-            });
+            }, { size: 15, accessibleName: p.tip });
+            btn.set_tooltip_text(p.tip);
             this._powerPills[p.id] = btn;
             segBox.append(btn);
         }
@@ -319,15 +325,10 @@ export const UsagePage = GObject.registerClass({
     _applyPowerStyle(profile) {
         if (!this._powerPills) return;
         for (const [id, btn] of Object.entries(this._powerPills)) {
-            btn.remove_css_class('active');
-            btn.remove_css_class('isle-power-saver');
-            btn.remove_css_class('isle-power-balanced');
-            btn.remove_css_class('isle-power-perf');
             if (id === profile) {
                 btn.add_css_class('active');
-                if (id === 'power-saver') btn.add_css_class('isle-power-saver');
-                else if (id === 'performance') btn.add_css_class('isle-power-perf');
-                else btn.add_css_class('isle-power-balanced');
+            } else {
+                btn.remove_css_class('active');
             }
         }
     }

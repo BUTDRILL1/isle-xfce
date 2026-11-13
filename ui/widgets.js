@@ -94,15 +94,20 @@ export function ownIcon(gicon) {
 const iconCache = new Map();
 
 /** Creates a GIcon for a bundled Isle SVG icon or system icon. */
+const LOCAL_ICONS_DIR = '/home/butarch/Desktop/isle-xfce/ui/icons';
+
 export function icon(name) {
     const resolved = ownName(name) ?? name;
     if (iconCache.has(resolved)) {
         return iconCache.get(resolved);
     }
     const filename = resolved.endsWith('.svg') ? resolved : `${resolved}.svg`;
+    const localPath = `${LOCAL_ICONS_DIR}/${filename}`;
     const path = `${ICONS_DIR}/${filename}`;
     let gicon;
-    if (GLib.file_test(path, GLib.FileTest.EXISTS)) {
+    if (GLib.file_test(localPath, GLib.FileTest.EXISTS)) {
+        gicon = new Gio.FileIcon({ file: Gio.File.new_for_path(localPath) });
+    } else if (GLib.file_test(path, GLib.FileTest.EXISTS)) {
         gicon = new Gio.FileIcon({ file: Gio.File.new_for_path(path) });
     } else {
         gicon = new Gio.ThemedIcon({ name: resolved });

@@ -12,7 +12,16 @@ import Pango from 'gi://Pango';
 
 import * as Format from './format.js';
 import * as Playback from './playback.js';
+import { paletteFor } from './bot.js';
+import { getPowerProfile, getTelemetryMonitor } from './telemetry.js';
 import { Bars, BotIcon, PrivacyDots, Ring, icon, label, pillButton } from './widgets.js';
+
+const POWER_COLORS = {
+    'power-saver': '#ffd60a',
+    'balanced': '#30d158',
+    'performance': '#ff453a',
+    'lightning': '#bf5af2',
+};
 
 export const CompactView = GObject.registerClass({
     GTypeName: 'IsleGtkCompactView',
@@ -63,6 +72,10 @@ export const CompactView = GObject.registerClass({
         this._botAvatar = new BotIcon(20, { shape: 'cloud', color: 'cloud', glow: 'match' });
         this._leftSlot.append(this._botAvatar);
         mainRow.append(this._leftSlot);
+
+        this._syncBotPowerColor();
+        this._telemetryMonitor = getTelemetryMonitor();
+        this._telemetryMonitor.connect('power-changed', () => this._syncBotPowerColor());
 
         // Center Slot: Date, Time, and Meridiem
         this._centerBox = new Gtk.Box({
@@ -353,6 +366,16 @@ export const CompactView = GObject.registerClass({
         if (win && win.has_css_class('isle-mode-peek')) {
             win.remove_css_class('isle-mode-peek');
         }
+    }
+
+    _syncBotPowerColor() {
+        if (!this._botAvatar) return;
+        const profile = getPowerProfile();
+        const hexColor = POWER_COLORS[profile] || '#30d158';
+        this._botAvatar.look = {
+            shape: 'cloud',
+            palette: paletteFor(hexColor, 'match'),
+        };
     }
 
     _tick() {
