@@ -75,10 +75,13 @@ export const SettingsPage = GObject.registerClass({
         // 3. Clock Format: 12-hour vs 24-hour
         rootBox.append(this._buildClockFormatSection());
 
-        // 4. Sound Toggle for Timer/Alarm
+        // 4. Tab Switching Interaction: Hover vs Click + Hold Time Slider
+        rootBox.append(this._buildTabSwitchingSection());
+
+        // 5. Sound Toggle for Timer/Alarm
         rootBox.append(this._buildSoundSection());
 
-        // 5. System Settings launcher (xfce4-settings-manager)
+        // 6. System Settings launcher (xfce4-settings-manager)
         rootBox.append(this._buildSystemSettingsSection());
 
         scrolled.set_child(rootBox);
@@ -236,6 +239,135 @@ export const SettingsPage = GObject.registerClass({
         btnBox.append(btn12);
         btnBox.append(btn24);
         card.append(btnBox);
+
+        return card;
+    }
+
+    _buildTabSwitchingSection() {
+        const card = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 6,
+            css_classes: ['isle-settings-card'],
+        });
+
+        const topRow = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 8,
+            valign: Gtk.Align.CENTER,
+            hexpand: true,
+        });
+
+        const labelBox = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 1,
+            hexpand: true,
+        });
+        const title = label('Tab Switching', 'isle-title');
+        const subtitle = label('Switch menu tabs on hover hold or manual click', 'isle-subtitle');
+        labelBox.append(title);
+        labelBox.append(subtitle);
+        topRow.append(labelBox);
+
+        const btnBox = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 6,
+            valign: Gtk.Align.CENTER,
+        });
+
+        let isHover = globalThis.isleTabSwitchMode !== 'click';
+        let currentHoldMs = globalThis.isleTabHoverHoldTime || 500;
+
+        let btnHover, btnClick;
+
+        const updateModeBtns = (hover) => {
+            if (hover) {
+                btnHover.add_css_class('isle-pill-accent');
+                btnHover.remove_css_class('isle-pill-small');
+                btnClick.remove_css_class('isle-pill-accent');
+                btnClick.add_css_class('isle-pill-small');
+            } else {
+                btnClick.add_css_class('isle-pill-accent');
+                btnClick.remove_css_class('isle-pill-small');
+                btnHover.remove_css_class('isle-pill-accent');
+                btnHover.add_css_class('isle-pill-small');
+            }
+        };
+
+        // Revealer for Hold Time Slider
+        const sliderRevealer = new Gtk.Revealer({
+            transition_type: Gtk.RevealerTransitionType.SLIDE_DOWN,
+            transition_duration: 180,
+            reveal_child: isHover,
+        });
+
+        const sliderBox = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 4,
+            margin_top: 4,
+            hexpand: true,
+        });
+
+        const sliderHead = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 8,
+            hexpand: true,
+        });
+        const sliderTitle = label('Hold Time', 'isle-subtitle');
+        const holdValueLbl = label(`${currentHoldMs} ms`, 'isle-settings-value', {
+            hexpand: true,
+            halign: Gtk.Align.END,
+        });
+        sliderHead.append(sliderTitle);
+        sliderHead.append(holdValueLbl);
+        sliderBox.append(sliderHead);
+
+        const scale = new Gtk.Scale({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            adjustment: new Gtk.Adjustment({
+                lower: 200,
+                upper: 2000,
+                step_increment: 50,
+                page_increment: 100,
+                value: currentHoldMs,
+            }),
+            hexpand: true,
+            draw_value: false,
+            css_classes: ['isle-settings-scale'],
+        });
+
+        scale.connect('value-changed', () => {
+            const val = Math.round(scale.get_value() / 50) * 50;
+            globalThis.isleTabHoverHoldTime = val;
+            holdValueLbl.set_text(`${val} ms`);
+            if (globalThis.isleSaveSettings) globalThis.isleSaveSettings();
+        });
+        sliderBox.append(scale);
+        sliderRevealer.set_child(sliderBox);
+
+        btnHover = pillButton('Hover', (isHover ? 'isle-pill-accent' : 'isle-pill-small'), () => {
+            isHover = true;
+            globalThis.isleTabSwitchMode = 'hover';
+            updateModeBtns(true);
+            sliderRevealer.set_reveal_child(true);
+            if (globalThis.isleSaveSettings) globalThis.isleSaveSettings();
+        });
+        btnHover.set_size_request(68, 28);
+
+        btnClick = pillButton('Click', (!isHover ? 'isle-pill-accent' : 'isle-pill-small'), () => {
+            isHover = false;
+            globalThis.isleTabSwitchMode = 'click';
+            updateModeBtns(false);
+            sliderRevealer.set_reveal_child(false);
+            if (globalThis.isleSaveSettings) globalThis.isleSaveSettings();
+        });
+        btnClick.set_size_request(68, 28);
+
+        btnBox.append(btnHover);
+        btnBox.append(btnClick);
+        topRow.append(btnBox);
+
+        card.append(topRow);
+        card.append(sliderRevealer);
 
         return card;
     }

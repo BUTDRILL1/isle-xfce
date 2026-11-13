@@ -135,6 +135,8 @@ export function init() {
     
     let currentGlassOpacity = 15;
     globalThis.isleSoundEnabled = true;
+    globalThis.isleTabSwitchMode = 'hover';
+    globalThis.isleTabHoverHoldTime = 500;
 
     const loadSettings = () => {
         try {
@@ -146,6 +148,8 @@ export function init() {
                     if (data.glassOpacity !== undefined) currentGlassOpacity = data.glassOpacity;
                     if (data.clockFormat) Format.setClockFormat(data.clockFormat);
                     if (data.soundEnabled !== undefined) globalThis.isleSoundEnabled = Boolean(data.soundEnabled);
+                    if (data.tabSwitchMode) globalThis.isleTabSwitchMode = data.tabSwitchMode;
+                    if (data.tabHoverHoldTime !== undefined) globalThis.isleTabHoverHoldTime = Number(data.tabHoverHoldTime);
                 }
             }
         } catch (e) {
@@ -160,6 +164,8 @@ export function init() {
                 glassOpacity: currentGlassOpacity,
                 clockFormat: Format.uses12Hour() ? '12h' : '24h',
                 soundEnabled: globalThis.isleSoundEnabled !== false,
+                tabSwitchMode: globalThis.isleTabSwitchMode || 'hover',
+                tabHoverHoldTime: globalThis.isleTabHoverHoldTime || 500,
             };
             const f = Gio.File.new_for_path(settingsPath);
             f.replace_contents(JSON.stringify(data, null, 2), null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);

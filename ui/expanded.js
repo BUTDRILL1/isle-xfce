@@ -53,6 +53,11 @@ export const TABS = {
 
 const TAB_OPACITY = { open: 1.0, hover: 0.78, idle: 0.55 };
 const SETTINGS_OPACITY = 0.6;
+const getHoverDwellMs = () => {
+    const val = globalThis.isleTabHoverHoldTime;
+    return (typeof val === 'number' && val >= 100) ? val : 500;
+};
+const isHoverSwitchEnabled = () => globalThis.isleTabSwitchMode !== 'click';
 const PAUSED_BARS_OPACITY = 0.43;
 
 export const ExpandedView = GObject.registerClass({
@@ -207,9 +212,40 @@ export const ExpandedView = GObject.registerClass({
         status.append(this._headerBars);
 
         // Assistant sparkle button
+        let micHoverTimerId = 0;
+        this._clearMicHoverTimer = () => {
+            if (micHoverTimerId) {
+                GLib.source_remove(micHoverTimerId);
+                micHoverTimerId = 0;
+            }
+        };
+
         this._micButton = iconButton('isle-sparkle-symbolic', 'isle-button-flat isle-header-mic', () => {
+            this._clearMicHoverTimer();
             this.emit('voice-requested');
         }, { size: 15, accessibleName: 'AI assistant' });
+
+        const micMotion = new Gtk.EventControllerMotion();
+        micMotion.connect('enter', () => {
+            this._micButton.set_opacity(1.0);
+            if (!this._assistantActive && isHoverSwitchEnabled()) {
+                this._clearMicHoverTimer();
+                micHoverTimerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, getHoverDwellMs(), () => {
+                    micHoverTimerId = 0;
+                    if (!this._assistantActive) {
+                        this.emit('voice-requested');
+                    }
+                    return GLib.SOURCE_REMOVE;
+                });
+            }
+        });
+        micMotion.connect('leave', () => {
+            this._clearMicHoverTimer();
+            if (!this._assistantActive) {
+                this._micButton.set_opacity(0.6);
+            }
+        });
+        this._micButton.add_controller(micMotion);
         status.append(this._micButton);
 
         // Header Clock Box: Ring + Date + Time
@@ -241,14 +277,36 @@ export const ExpandedView = GObject.registerClass({
         status.append(clock);
 
         // Settings button
+        let settingsHoverTimerId = 0;
+        this._clearSettingsHoverTimer = () => {
+            if (settingsHoverTimerId) {
+                GLib.source_remove(settingsHoverTimerId);
+                settingsHoverTimerId = 0;
+            }
+        };
+
         const settings = this._settingsBtn = iconButton('isle-settings', 'isle-button-flat isle-header-settings', () => {
+            this._clearSettingsHoverTimer();
             this.emit('settings-requested');
         }, { size: 15, accessibleName: 'Settings' });
         settings.set_opacity(SETTINGS_OPACITY);
 
         const motion = new Gtk.EventControllerMotion();
-        motion.connect('enter', () => settings.set_opacity(1.0));
+        motion.connect('enter', () => {
+            settings.set_opacity(1.0);
+            if (!this._settingsActive && isHoverSwitchEnabled()) {
+                this._clearSettingsHoverTimer();
+                settingsHoverTimerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, getHoverDwellMs(), () => {
+                    settingsHoverTimerId = 0;
+                    if (!this._settingsActive) {
+                        this.emit('settings-requested');
+                    }
+                    return GLib.SOURCE_REMOVE;
+                });
+            }
+        });
         motion.connect('leave', () => {
+            this._clearSettingsHoverTimer();
             if (!this._settingsActive) settings.set_opacity(SETTINGS_OPACITY);
         });
         settings.add_controller(motion);
@@ -341,14 +399,38 @@ export const ExpandedView = GObject.registerClass({
                 can_focus: true,
             });
 
-            tab.connect('clicked', () => this.showPage(index));
+            let hoverTimerId = 0;
+            const clearHoverTimer = () => {
+                if (hoverTimerId) {
+                    GLib.source_remove(hoverTimerId);
+                    hoverTimerId = 0;
+                }
+            };
+
+            tab.connect('clicked', () => {
+                clearHoverTimer();
+                this.showPage(index);
+            });
 
             const motion = new Gtk.EventControllerMotion();
             motion.connect('enter', () => {
-                if (index !== this._index) tabIcon.set_opacity(TAB_OPACITY.hover);
+                if (index !== this._index || this._assistantActive || this._settingsActive) {
+                    tabIcon.set_opacity(TAB_OPACITY.hover);
+                    if (isHoverSwitchEnabled()) {
+                        clearHoverTimer();
+                        hoverTimerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, getHoverDwellMs(), () => {
+                            hoverTimerId = 0;
+                            this.showPage(index);
+                            return GLib.SOURCE_REMOVE;
+                        });
+                    }
+                }
             });
             motion.connect('leave', () => {
-                if (index !== this._index) tabIcon.set_opacity(TAB_OPACITY.idle);
+                clearHoverTimer();
+                if (index !== this._index || this._assistantActive || this._settingsActive) {
+                    tabIcon.set_opacity(TAB_OPACITY.idle);
+                }
             });
             tab.add_controller(motion);
 
@@ -362,6 +444,7 @@ export const ExpandedView = GObject.registerClass({
                 badge,
                 iconName,
                 page,
+                clearHoverTimer,
             };
         });
 
@@ -502,7 +585,14 @@ export const ExpandedView = GObject.registerClass({
         this._overlayStack.set_visible_child_name('normal');
     }
 
+    _clearAllHoverTimers() {
+        this._tabs?.forEach(t => t.clearHoverTimer?.());
+        this._clearMicHoverTimer?.();
+        this._clearSettingsHoverTimer?.();
+    }
+
     toggleAssistant(open = null) {
+        this._clearAllHoverTimers();
         const isAssistant = this._contentStack.get_visible_child_name() === 'assistant';
         const target = open !== null ? open : !isAssistant;
         const win = this.get_root() || Gtk.Application.get_default()?.get_active_window();
@@ -528,6 +618,7 @@ export const ExpandedView = GObject.registerClass({
     }
 
     toggleSettings(open = null) {
+        this._clearAllHoverTimers();
         const isSettings = this._contentStack.get_visible_child_name() === 'settings';
         const target = open !== null ? open : !isSettings;
         if (target) {
@@ -596,6 +687,7 @@ export const ExpandedView = GObject.registerClass({
     }
 
     showPage(target, { animate = true } = {}) {
+        this._clearAllHoverTimers();
         if (target === 'settings') {
             this.toggleSettings(true);
             return;
@@ -801,6 +893,11 @@ export const ExpandedView = GObject.registerClass({
 
     _syncWidth() {
         this.emit('width-changed');
+    }
+
+    destroy() {
+        this._clearAllHoverTimers();
+        this._stopClockTick();
     }
 });
 

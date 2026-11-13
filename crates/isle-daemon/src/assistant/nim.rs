@@ -231,6 +231,86 @@ fn native_tools() -> Vec<Value> {
                 }
             }
         }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "timer",
+                "description": "Start a countdown timer in minutes.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "minutes": {
+                            "type": "number",
+                            "description": "Duration of timer in minutes (e.g. 5, 10, 25)."
+                        },
+                        "label": {
+                            "type": "string",
+                            "description": "Optional label or description for the timer."
+                        }
+                    },
+                    "required": ["minutes"]
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "alarm",
+                "description": "Set an alarm for a specific time.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "time": {
+                            "type": "string",
+                            "description": "Time to ring, e.g. '07:00' or '14:30'."
+                        },
+                        "label": {
+                            "type": "string",
+                            "description": "Optional label for the alarm."
+                        }
+                    },
+                    "required": ["time"]
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "add_event",
+                "description": "Add an event to the desktop calendar.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "text": {
+                            "type": "string",
+                            "description": "Event title and time, e.g. 'Team Sync 5:00 pm'."
+                        },
+                        "date": {
+                            "type": "string",
+                            "description": "Date formatted as YYYY-MM-DD."
+                        }
+                    },
+                    "required": ["text"]
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "remove_event",
+                "description": "Remove an event from the calendar by id.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "id": {
+                            "type": "string",
+                            "description": "ID of the event to remove."
+                        }
+                    },
+                    "required": ["id"]
+                }
+            }
+        }),
     ]
 }
 
@@ -532,9 +612,15 @@ impl Nim {
                     "top_processes" => json!({
                         "type": "top_processes",
                     }),
-                    other => json!({
-                        "type": other,
-                    }),
+                    other => {
+                        let mut act = parsed_args.clone();
+                        if let Some(map) = act.as_object_mut() {
+                            map.insert("type".to_string(), json!(other));
+                        } else {
+                            act = json!({ "type": other });
+                        }
+                        act
+                    }
                 };
                 actions.push(action);
             }

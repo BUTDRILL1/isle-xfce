@@ -102,6 +102,8 @@ export const CalendarPage = GObject.registerClass({
         this._edsEvents = [];
         this._buildUi();
 
+        globalThis.isleCalendar = this;
+
         this.watch(['calendar', 'events'], () => this._update());
         this._update();
         this._refreshEds();
@@ -209,6 +211,20 @@ export const CalendarPage = GObject.registerClass({
             if (Array.isArray(edsEvents)) {
                 this._edsEvents = edsEvents;
                 this._update();
+
+                // Push loaded desktop events to isled daemon so assistant agenda has access
+                try {
+                    const daemonEvents = edsEvents.map(ev => ({
+                        id: ev.id || `eds-${Math.random().toString(36).slice(2)}`,
+                        title: ev.title || 'Untitled',
+                        date: ev.date || (new Date()).toISOString().slice(0, 10),
+                        start: ev.start || null,
+                        end: ev.end || null,
+                    }));
+                    await this.daemon?.call('calendar', 'SetDesktopEvents', JSON.stringify(daemonEvents));
+                } catch (err) {
+                    console.warn(`Isle: could not push desktop events to daemon: ${err.message}`);
+                }
             }
         } catch (e) {
             print(`[Isle Calendar] _refreshEds ERROR: ${e.message}`);
@@ -281,18 +297,30 @@ export const CalendarPage = GObject.registerClass({
 
                 for (const ics of icsList) {
                     const unfolded = ics.replace(/\r?\n[ \t]/g, '');
+                    const uid = unfolded.match(/^UID.*?:(.*)$/m)?.[1]?.trim() || `eds-${Math.random().toString(36).slice(2)}`;
                     const summary = unfolded.match(/^SUMMARY.*?:(.*)$/m)?.[1]?.trim() || 'Untitled';
                     const dtstart = unfolded.match(/^DTSTART.*?:(.*)$/m)?.[1]?.trim();
                     const dtend = unfolded.match(/^DTEND.*?:(.*)$/m)?.[1]?.trim();
                     const isAllDay = !dtstart || !dtstart.includes('T');
                     const start = parseTime(dtstart);
                     const end = parseTime(dtend);
+                    const todayIso = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+                    let eventDate = todayIso;
+                    const dateMatch = dtstart?.match(/^(\d{4})(\d{2})(\d{2})/);
+                    if (dateMatch) {
+                        const parsed = `${dateMatch[1]}-${dateMatch[2]}-${dateMatch[3]}`;
+                        if (parsed >= todayIso) {
+                            eventDate = parsed;
+                        }
+                    }
                     const descMatch = unfolded.match(/^DESCRIPTION.*?:(.*)$/m)?.[1] || '';
                     const locMatch = unfolded.match(/^LOCATION.*?:(.*)$/m)?.[1] || '';
                     const link = extractEventLink(unfolded, summary, descMatch, locMatch);
 
                     events.push({
+                        id: uid,
                         title: summary,
+                        date: eventDate,
                         allDay: isAllDay,
                         start,
                         end,
@@ -318,18 +346,9 @@ export const CalendarPage = GObject.registerClass({
         const todayIso = now.format('%Y-%m-%d');
 
         try {
-            // First attempt with 3-arg signature (calendar, date, text)
-            const res = await this.daemon.call('calendar', 'Add', '', todayIso, text);
-            if (res === null || res === undefined) {
-                // Fallback to 2-arg signature (date, text)
-                await this.daemon.call('calendar', 'Add', todayIso, text).catch(() => {});
-            }
-        } catch {
-            try {
-                await this.daemon.call('calendar', 'Add', todayIso, text);
-            } catch (e) {
-                console.warn(`Isle: could not add calendar event: ${e.message}`);
-            }
+            await this.daemon.call('calendar', 'Add', todayIso, text);
+        } catch (e) {
+            console.warn(`Isle: could not add calendar event: ${e.message}`);
         }
         await this._refreshEds();
     }

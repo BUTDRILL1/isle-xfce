@@ -36,9 +36,11 @@ impl Sources {
         let todo = self.todo.get().await;
         let calendar = self.calendar.get().await;
         let reminders = self.reminders.get().await;
+        let mut all_events = calendar.calendar().events().to_vec();
+        all_events.extend(calendar.desktop_events());
         summary(
             todo.list().items(),
-            calendar.calendar().events(),
+            &all_events,
             reminders.reminders().items(),
             &chrono::Local::now(),
         )

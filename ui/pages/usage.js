@@ -9,9 +9,19 @@ import GObject from 'gi://GObject';
 import Gtk from 'gi://Gtk?version=4.0';
 import Pango from 'gi://Pango';
 
-import { icon, label } from '../widgets.js';
+import { icon, label, pillButton } from '../widgets.js';
 import { Page } from '../page.js';
-import { getTelemetryMonitor, getBatteryTelemetry, sampleNetworkThroughput } from '../telemetry.js';
+import {
+    getTelemetryMonitor,
+    getBatteryTelemetry,
+    sampleNetworkThroughput,
+    sampleCpuUsage,
+    getMemoryUsage,
+    getCpuTemp,
+    getDiskUsage,
+    getPowerProfile,
+    setPowerProfile,
+} from '../telemetry.js';
 
 const ACCENTS = {
     claude: '#d97857',
@@ -31,10 +41,10 @@ export const UsagePage = GObject.registerClass({
 
         this._card = new Gtk.Box({
             orientation: Gtk.Orientation.VERTICAL,
-            spacing: 8,
+            spacing: 10,
             hexpand: true,
-            vexpand: true,
-            valign: Gtk.Align.CENTER,
+            vexpand: false,
+            valign: Gtk.Align.START,
             css_classes: ['isle-usage-content'],
         });
         this.append(this._card);
@@ -44,6 +54,10 @@ export const UsagePage = GObject.registerClass({
 
         this._monitor = getTelemetryMonitor();
         this._monitorHandler = this._monitor.connect('updated', () => this._updateLiveTelemetry());
+    }
+
+    getDesiredHeight() {
+        return 245;
     }
 
     _providers() {
@@ -171,7 +185,7 @@ export const UsagePage = GObject.registerClass({
         });
 
         const mark = new Gtk.Box({
-            css_classes: ['isle-usage-mark'],
+            css_classes: ['isle-usage-mark', 'isle-usage-mark-live'],
             valign: Gtk.Align.CENTER,
         });
         head.append(mark);
@@ -179,83 +193,222 @@ export const UsagePage = GObject.registerClass({
         const nameLbl = label('System Telemetry', 'isle-usage-name');
         head.append(nameLbl);
 
-        const daemonBadge = label('isled connected', 'isle-usage-plan');
-        head.append(daemonBadge);
-
         const netName = system.network?.connected
             ? (system.network?.name || system.network?.connection || 'Connected')
             : 'Offline';
-        const stampLbl = label(`Network: ${netName}`, 'isle-usage-stamp', {
+        this._netStampLbl = label(netName, 'isle-usage-stamp', {
             hexpand: true,
             halign: Gtk.Align.END,
         });
-        head.append(stampLbl);
+        head.append(this._netStampLbl);
         this._card.append(head);
 
-        // Metric Rows
-        const limits = new Gtk.Box({
-            orientation: Gtk.Orientation.VERTICAL,
-            spacing: 8,
-            css_classes: ['isle-usage-limits'],
+        // 2-Column Telemetry Grid
+        const grid = new Gtk.Grid({
+            column_homogeneous: true,
+            column_spacing: 14,
+            row_spacing: 10,
+            hexpand: true,
+            css_classes: ['isle-usage-grid'],
         });
 
-        // 1. Battery Telemetry (from System1 + UPower)
-        const battery = system.battery;
-        const batInfo = getBatteryTelemetry(battery);
+        // 1. CPU Usage
+        const cpuPct = sampleCpuUsage();
+        const cpuItem = this._buildTelemetryRow('CPU', `${Math.round(cpuPct)}%`, cpuPct / 100);
+        this._cpuDescLbl = cpuItem.descLbl;
+        this._cpuTrack = cpuItem.track;
+        this._applyLoadClass(this._cpuTrack, cpuPct);
+        grid.attach(cpuItem.row, 0, 0, 1, 1);
+
+        // 2. Memory Usage
+        const mem = getMemoryUsage();
+        const memDesc = mem ? `${mem.usedGb.toFixed(1)} / ${mem.totalGb.toFixed(1)} GiB` : 'N/A';
+        const memPct = mem ? mem.pct : 0;
+        const memItem = this._buildTelemetryRow('Memory', memDesc, memPct / 100);
+        this._memDescLbl = memItem.descLbl;
+        this._memTrack = memItem.track;
+        this._applyLoadClass(this._memTrack, memPct);
+        grid.attach(memItem.row, 1, 0, 1, 1);
+
+        // 3. CPU Thermal
+        const tempC = getCpuTemp();
+        const tempDesc = tempC !== null ? `${tempC}°C` : 'N/A';
+        const tempPct = tempC !== null ? Math.min(100, Math.max(0, tempC)) : 0;
+        const tempItem = this._buildTelemetryRow('Thermal', tempDesc, tempPct / 100);
+        this._tempDescLbl = tempItem.descLbl;
+        this._tempTrack = tempItem.track;
+        this._applyLoadClass(this._tempTrack, tempPct, 68, 84);
+        grid.attach(tempItem.row, 0, 1, 1, 1);
+
+        // 4. Root Disk
+        const disk = getDiskUsage();
+        const diskDesc = disk ? `${disk.freeGb.toFixed(1)} GiB free` : 'N/A';
+        const diskPct = disk ? disk.pct : 0;
+        const diskItem = this._buildTelemetryRow('Disk /', diskDesc, diskPct / 100);
+        this._diskDescLbl = diskItem.descLbl;
+        this._diskTrack = diskItem.track;
+        this._applyLoadClass(this._diskTrack, diskPct, 75, 90);
+        grid.attach(diskItem.row, 1, 1, 1, 1);
+
+        // 5. Battery
+        const batInfo = getBatteryTelemetry(system.battery);
         if (batInfo) {
-            const { row, descLbl, track } = this._buildTelemetryRow('Battery', batInfo.fullText, batInfo.percent / 100);
-            this._batteryDescLbl = descLbl;
-            this._batteryTrack = track;
-            limits.append(row);
+            const batItem = this._buildTelemetryRow('Battery', batInfo.fullText, batInfo.percent / 100);
+            this._batteryDescLbl = batItem.descLbl;
+            this._batteryTrack = batItem.track;
+            this._applyBatteryClass(this._batteryTrack, batInfo.percent);
+            grid.attach(batItem.row, 0, 2, 1, 1);
         } else {
-            this._batteryDescLbl = null;
-            this._batteryTrack = null;
+            const acItem = this._buildTelemetryRow('Power', 'AC Connected', 1.0);
+            this._batteryDescLbl = acItem.descLbl;
+            this._batteryTrack = acItem.track;
+            this._applyBatteryClass(this._batteryTrack, 100);
+            grid.attach(acItem.row, 0, 2, 1, 1);
         }
 
-        // 2. Network Activity (from System1 + /proc/net/dev)
+        // 6. Network Activity
         const net = system.network;
-        const netPct = net?.connected ? 1.0 : 0.0;
         const netSpeed = sampleNetworkThroughput();
-        const netDesc = net?.connected ? netSpeed.formatted : 'Disconnected';
-        const { row, descLbl, track } = this._buildTelemetryRow('Network Status', netDesc, netPct);
-        this._netDescLbl = descLbl;
-        this._netTrack = track;
-        limits.append(row);
+        const netDesc = net?.connected ? `↓ ${netSpeed.downSpeedStr} · ↑ ${netSpeed.upSpeedStr}` : 'Disconnected';
+        const totalBps = (netSpeed.rxBytesSec || 0) + (netSpeed.txBytesSec || 0);
+        // Scale log-like up to ~10 MB/s for visual activity bar
+        const netFrac = net?.connected ? Math.min(1, Math.max(0.06, Math.log10(1 + totalBps / 1024) / 4)) : 0;
+        const netItem = this._buildTelemetryRow('Network', netDesc, netFrac);
+        this._netDescLbl = netItem.descLbl;
+        this._netTrack = netItem.track;
+        grid.attach(netItem.row, 1, 2, 1, 1);
 
-        // 3. Continuous CPU / RAM API note
-        const noteRow = new Gtk.Box({
+        this._card.append(grid);
+
+        // Power Profile Segmented Selector Row
+        this._powerProfile = getPowerProfile();
+        const powerRow = new Gtk.Box({
             orientation: Gtk.Orientation.HORIZONTAL,
             spacing: 8,
-            css_classes: ['isle-usage-line'],
+            hexpand: true,
+            valign: Gtk.Align.CENTER,
+            css_classes: ['isle-power-row'],
         });
-        const noteLbl = label(
-            'Daemon API: Usage1 monitors AI plan quotas; continuous CPU/RAM requires daemon extension',
-            'isle-usage-empty',
-            { hexpand: true }
-        );
-        noteLbl.set_halign(Gtk.Align.START);
-        noteRow.append(noteLbl);
-        limits.append(noteRow);
+        const powerTitle = label('Power Profile', 'isle-usage-window', { hexpand: true, halign: Gtk.Align.START });
+        powerRow.append(powerTitle);
 
-        this._card.append(limits);
+        const segBox = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 4,
+            valign: Gtk.Align.CENTER,
+            css_classes: ['isle-power-seg'],
+        });
+        this._powerPills = {};
+        const profiles = [
+            { id: 'power-saver', text: 'Power Saver' },
+            { id: 'balanced', text: 'Balanced' },
+            { id: 'performance', text: 'Performance' },
+        ];
+        for (const p of profiles) {
+            const btn = pillButton(p.text, 'isle-pill-small isle-power-option', () => {
+                this._selectPowerProfile(p.id);
+            });
+            this._powerPills[p.id] = btn;
+            segBox.append(btn);
+        }
+        powerRow.append(segBox);
+        this._card.append(powerRow);
+        this._applyPowerStyle(this._powerProfile);
+    }
+
+    _applyPowerStyle(profile) {
+        if (!this._powerPills) return;
+        for (const [id, btn] of Object.entries(this._powerPills)) {
+            btn.remove_css_class('active');
+            btn.remove_css_class('isle-power-saver');
+            btn.remove_css_class('isle-power-balanced');
+            btn.remove_css_class('isle-power-perf');
+            if (id === profile) {
+                btn.add_css_class('active');
+                if (id === 'power-saver') btn.add_css_class('isle-power-saver');
+                else if (id === 'performance') btn.add_css_class('isle-power-perf');
+                else btn.add_css_class('isle-power-balanced');
+            }
+        }
+    }
+
+    _selectPowerProfile(next) {
+        this._powerProfile = next;
+        this._applyPowerStyle(next);
+        setPowerProfile(next, actual => {
+            this._powerProfile = actual;
+            this._applyPowerStyle(actual);
+        });
+    }
+
+    _applyLoadClass(track, pct, warn = 70, crit = 88) {
+        if (!track) return;
+        track.remove_css_class('ok');
+        track.remove_css_class('warn');
+        track.remove_css_class('crit');
+        if (pct >= crit) track.add_css_class('crit');
+        else if (pct >= warn) track.add_css_class('warn');
+        else track.add_css_class('ok');
+    }
+
+    _applyBatteryClass(track, pct) {
+        if (!track) return;
+        track.remove_css_class('ok');
+        track.remove_css_class('warn');
+        track.remove_css_class('crit');
+        if (pct <= 15) track.add_css_class('crit');
+        else if (pct <= 30) track.add_css_class('warn');
+        else track.add_css_class('ok');
     }
 
     _updateLiveTelemetry() {
         const system = this._system();
+        if (this._cpuDescLbl) {
+            const cpuPct = sampleCpuUsage();
+            this._cpuDescLbl.set_text(`${Math.round(cpuPct)}%`);
+            this._cpuTrack?.set_fraction(cpuPct / 100);
+            this._applyLoadClass(this._cpuTrack, cpuPct);
+        }
+        if (this._memDescLbl) {
+            const mem = getMemoryUsage();
+            if (mem) {
+                this._memDescLbl.set_text(`${mem.usedGb.toFixed(1)} / ${mem.totalGb.toFixed(1)} GiB`);
+                this._memTrack?.set_fraction(mem.pct / 100);
+                this._applyLoadClass(this._memTrack, mem.pct);
+            }
+        }
+        if (this._tempDescLbl) {
+            const tempC = getCpuTemp();
+            if (tempC !== null) {
+                this._tempDescLbl.set_text(`${tempC}°C`);
+                this._tempTrack?.set_fraction(Math.min(1, Math.max(0, tempC / 100)));
+                this._applyLoadClass(this._tempTrack, tempC, 68, 84);
+            }
+        }
+        if (this._diskDescLbl) {
+            const disk = getDiskUsage();
+            if (disk) {
+                this._diskDescLbl.set_text(`${disk.freeGb.toFixed(1)} GiB free`);
+                this._diskTrack?.set_fraction(disk.pct / 100);
+                this._applyLoadClass(this._diskTrack, disk.pct, 75, 90);
+            }
+        }
         if (this._batteryDescLbl) {
             const batInfo = getBatteryTelemetry(system.battery);
             if (batInfo) {
                 this._batteryDescLbl.set_text(batInfo.fullText);
-                if (this._batteryTrack) {
-                    this._batteryTrack.set_fraction(batInfo.percent / 100);
-                }
+                this._batteryTrack?.set_fraction(batInfo.percent / 100);
+                this._applyBatteryClass(this._batteryTrack, batInfo.percent);
             }
         }
         if (this._netDescLbl) {
             const net = system.network;
             const netSpeed = sampleNetworkThroughput();
-            const netDesc = net?.connected ? netSpeed.formatted : 'Disconnected';
+            const netDesc = net?.connected ? `↓ ${netSpeed.downSpeedStr} · ↑ ${netSpeed.upSpeedStr}` : 'Disconnected';
+            const totalBps = (netSpeed.rxBytesSec || 0) + (netSpeed.txBytesSec || 0);
+            const netFrac = net?.connected ? Math.min(1, Math.max(0.06, Math.log10(1 + totalBps / 1024) / 4)) : 0;
             this._netDescLbl.set_text(netDesc);
+            this._netTrack?.set_fraction(netFrac);
         }
     }
 

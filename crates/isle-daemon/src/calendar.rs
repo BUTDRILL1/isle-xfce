@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone, Utc};
 use isle_core::calendar::{AddError, Calendar, Event, Parsed, Send, format_time, parse};
 use log::warn;
+use serde::Deserialize;
 use tokio::sync::Notify;
 use zbus::object_server::{InterfaceRef, SignalEmitter};
 use zbus::{fdo, interface};
@@ -33,6 +34,7 @@ pub struct CalendarService {
     /// Under a lock of its own, held for a moment: zbus's lock on the service is only ever read, so a
     /// slow `AddTo` never holds up the rest (the preview of a line typed, a ×).
     calendar: Mutex<Calendar>,
+    desktop_events: Mutex<Vec<Event>>,
     store: Store<Calendar>,
     links: MeetingLinks,
     /// Told when an event starts waiting for its calendar: `send_waiting` sleeps on it while none waits.
@@ -49,6 +51,7 @@ impl CalendarService {
         }
         Self {
             calendar: Mutex::new(calendar),
+            desktop_events: Mutex::new(Vec::new()),
             store,
             links: MeetingLinks::default(),
             waiting: Arc::default(),
@@ -58,6 +61,11 @@ impl CalendarService {
     /// The events, for the assistant and the agenda; let go of before any wait.
     pub fn calendar(&self) -> MutexGuard<'_, Calendar> {
         self.calendar.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The live desktop/EDS events synchronized from the frontend.
+    pub fn desktop_events(&self) -> Vec<Event> {
+        self.desktop_events.lock().unwrap_or_else(PoisonError::into_inner).clone()
     }
 
     /// Saves the events and tells the extension they changed.
@@ -94,8 +102,44 @@ impl CalendarService {
     }
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct DesktopEventInput {
+    #[serde(default)]
+    id: serde_json::Value,
+    title: String,
+    date: String,
+    #[serde(default)]
+    start: Option<String>,
+    #[serde(default)]
+    end: Option<String>,
+}
+
 #[interface(name = "io.github.zickrian.isle.Calendar1")]
 impl CalendarService {
+    /// Replaces the current live desktop / CalDAV calendar events for the assistant's agenda.
+    async fn set_desktop_events(&self, events_json: &str) -> fdo::Result<()> {
+        let events: Vec<DesktopEventInput> = serde_json::from_str(events_json).map_err(|err| {
+            fdo::Error::InvalidArgs(format!("invalid events JSON: {err}"))
+        })?;
+        let mut converted = Vec::with_capacity(events.len());
+        for (idx, de) in events.into_iter().enumerate() {
+            let id = match de.id {
+                serde_json::Value::Number(n) => n.as_u64().unwrap_or(idx as u64 + 1000),
+                _ => idx as u64 + 1000,
+            };
+            converted.push(Event {
+                id,
+                title: de.title,
+                date: de.date,
+                start: de.start,
+                end: de.end,
+                send: None,
+            });
+        }
+        *self.desktop_events.lock().unwrap_or_else(PoisonError::into_inner) = converted;
+        Ok(())
+    }
+
     /// Adds an event on `date` ("YYYY-MM-DD") from a line of text such as
     /// "Lunch 12:30" or "Standup 9:00-9:15"; returns its id.
     async fn add(

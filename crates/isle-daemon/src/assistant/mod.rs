@@ -804,6 +804,8 @@ impl Session {
              \"chrome kiri vscode kanan\" is halves with apps [\"Google Chrome\", \"Visual Studio Code\"]); \
              without apps, the windows in front. Use it instead of several window actions\n\
              - focus {{command: start | stop}}: the focus (pomodoro) timer\n\
+             - timer {{minutes, label}}: start a countdown timer (e.g. 5 minutes, 10 minutes)\n\
+             - alarm {{time: \"HH:MM\", label}}: set an alarm for a specific time (e.g. \"07:00\", \"14:30\")\n\
              - add_task {{text}}: a to-do; done_task {{id}} ticks one off, remove_task {{id}} deletes it\n\
              - add_event {{date: YYYY-MM-DD, text}}: a calendar event; put its time in the text, e.g. \"Dinner 8:00 pm\"\n\
              - remind {{minutes, text}}: a reminder shown that many minutes from now; cancel_reminder {{id}} \

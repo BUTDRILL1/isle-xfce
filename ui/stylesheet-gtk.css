@@ -1280,6 +1280,18 @@ button.isle-button, button.isle-pill, button.isle-tab, button.isle-corner-close 
 .isle-usage-percent { font-size: 13px; font-weight: 700; min-width: 40px; text-align: right; }
 .isle-usage-percent.critical { color: #ff453a; }
 .isle-usage-track { min-height: 5px; border-radius: 3px; background-color: rgba(255, 255, 255, 0.1); }
+progressbar.isle-usage-track trough { min-height: 6px; border-radius: 3px; background-color: rgba(255, 255, 255, 0.12); border: none; }
+progressbar.isle-usage-track progress { min-height: 6px; border-radius: 3px; background-color: #0a84ff; border: none; }
+progressbar.isle-usage-track.ok progress { background-color: #30d158; }
+progressbar.isle-usage-track.warn progress { background-color: #ff9f0a; }
+progressbar.isle-usage-track.crit progress { background-color: #ff453a; }
+.isle-usage-mark-live { background-color: #30d158; min-width: 8px; min-height: 8px; border-radius: 4px; }
+.isle-power-row { margin-top: 2px; padding-top: 6px; border-top: 1px solid rgba(255, 255, 255, 0.08); }
+.isle-power-option { font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 10px; min-height: 22px; background-color: rgba(255, 255, 255, 0.06); color: rgba(255, 255, 255, 0.65); }
+.isle-power-option:hover { background-color: rgba(255, 255, 255, 0.12); color: #ffffff; }
+.isle-power-saver { background-color: rgba(48, 209, 88, 0.22); color: #30d158; }
+.isle-power-balanced { background-color: rgba(10, 132, 255, 0.22); color: #5ac8fa; }
+.isle-power-perf { background-color: rgba(255, 159, 10, 0.22); color: #ff9f0a; }
 .isle-usage-fill { min-height: 5px; border-radius: 3px; }
 .isle-usage-fill.critical { background-color: #ff453a; }
 .isle-usage-empty { font-size: 12px; color: rgba(255, 255, 255, 0.55); }
@@ -1920,6 +1932,12 @@ button.isle-button, button.isle-pill, button.isle-tab, button.isle-corner-close 
 .isle-settings-scale highlight {
   background-color: #0a84ff;
   border-radius: 999px;
+}
+.isle-settings-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: #0a84ff;
+  font-feature-settings: "tnum";
 }
 .isle-header-settings.active {
   opacity: 1.0;

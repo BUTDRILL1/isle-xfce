@@ -235,6 +235,78 @@ async function handleCancelReminder(action, daemon) {
 }
 
 /**
+ * Adds a calendar event via D-Bus daemon and refreshes desktop calendar.
+ */
+async function handleAddEvent(action, daemon) {
+    print(`[Isle Actions handleAddEvent] action: ${JSON.stringify(action)}`);
+    let text = action.text || action.title || action.summary || action.name || (action.event ? String(action.event) : '');
+    if (action.time && text && !text.includes(action.time)) {
+        text = `${text} ${action.time}`;
+    }
+    if (!text)
+        return { ok: false, detail: 'event text or title is required' };
+    if (!daemon)
+        return { ok: false, detail: 'daemon not connected' };
+    const date = action.date || (new Date()).toISOString().slice(0, 10);
+    try {
+        if (action.calendar) {
+            await daemon.call('calendar', 'AddTo', action.calendar, date, text);
+        } else {
+            await daemon.call('calendar', 'Add', date, text);
+        }
+        globalThis.isleCalendar?._refreshEds?.();
+        return { ok: true, detail: `event "${text}" added for ${date}` };
+    } catch (e) {
+        return { ok: false, detail: e.message };
+    }
+}
+
+/**
+ * Removes a calendar event via D-Bus daemon.
+ */
+async function handleRemoveEvent(action, daemon) {
+    print(`[Isle Actions handleRemoveEvent] action: ${JSON.stringify(action)}`);
+    const id = Number(action.id);
+    if (!Number.isInteger(id))
+        return { ok: false, detail: 'numeric event id is required' };
+    if (!daemon)
+        return { ok: false, detail: 'daemon not connected' };
+    try {
+        await daemon.call('calendar', 'Remove', id);
+        globalThis.isleCalendar?._refreshEds?.();
+        return { ok: true, detail: 'event removed' };
+    } catch (e) {
+        return { ok: false, detail: e.message };
+    }
+}
+
+/**
+ * Starts a countdown timer in TimerPage.
+ */
+function handleTimer(action) {
+    print(`[Isle Actions handleTimer] action: ${JSON.stringify(action)}`);
+    const minutes = Number(action.minutes) || 25;
+    const label = action.label || action.text || 'Timer';
+    if (globalThis.isleTimerPage) {
+        return globalThis.isleTimerPage.startTimer(minutes, label);
+    }
+    return { ok: false, detail: 'timer page not loaded' };
+}
+
+/**
+ * Sets an alarm in TimerPage and syncs with GNOME Clocks.
+ */
+function handleAlarm(action) {
+    print(`[Isle Actions handleAlarm] action: ${JSON.stringify(action)}`);
+    const time = action.time || action.text || '07:00';
+    const label = action.label || action.title || 'Alarm';
+    if (globalThis.isleTimerPage) {
+        return globalThis.isleTimerPage.setAlarm(time, label);
+    }
+    return { ok: false, detail: 'timer page not loaded' };
+}
+
+/**
  * Controls system volume via wpctl (PipeWire / WirePlumber).
  */
 async function handleVolume(action) {
@@ -393,6 +465,18 @@ export async function executeActions(actions, { daemon, decide } = {}) {
                 break;
             case 'cancel_reminder':
                 res = await handleCancelReminder(action, daemon);
+                break;
+            case 'add_event':
+                res = await handleAddEvent(action, daemon);
+                break;
+            case 'remove_event':
+                res = await handleRemoveEvent(action, daemon);
+                break;
+            case 'timer':
+                res = handleTimer(action);
+                break;
+            case 'alarm':
+                res = handleAlarm(action);
                 break;
             case 'volume':
                 res = await handleVolume(action);

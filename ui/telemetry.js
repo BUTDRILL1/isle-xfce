@@ -247,6 +247,168 @@ export function sampleNetworkThroughput() {
     return _cachedThroughput;
 }
 
+let _lastCpuSample = null;
+let _cachedCpuPct = 0;
+
+export function sampleCpuUsage() {
+    try {
+        const [ok, data] = GLib.file_get_contents('/proc/stat');
+        if (!ok) return _cachedCpuPct;
+        const firstLine = new TextDecoder().decode(data).split('\n')[0] || '';
+        const parts = firstLine.trim().split(/\s+/).slice(1).map(Number);
+        if (parts.length < 4) return _cachedCpuPct;
+
+        const idle = parts[3] + (parts[4] || 0);
+        const total = parts.reduce((acc, v) => acc + (isNaN(v) ? 0 : v), 0);
+
+        if (_lastCpuSample) {
+            const dTotal = total - _lastCpuSample.total;
+            const dIdle = idle - _lastCpuSample.idle;
+            if (dTotal > 0) {
+                _cachedCpuPct = Math.max(0, Math.min(100, ((dTotal - dIdle) / dTotal) * 100));
+            }
+        }
+        _lastCpuSample = { total, idle };
+    } catch (_) {}
+    return _cachedCpuPct;
+}
+
+export function getMemoryUsage() {
+    try {
+        const [ok, data] = GLib.file_get_contents('/proc/meminfo');
+        if (!ok) return null;
+        const text = new TextDecoder().decode(data);
+        const totalMatch = text.match(/^MemTotal:\s+(\d+)\s+kB/m);
+        const availMatch = text.match(/^MemAvailable:\s+(\d+)\s+kB/m);
+        if (!totalMatch || !availMatch) return null;
+
+        const totalKb = parseInt(totalMatch[1], 10);
+        const availKb = parseInt(availMatch[1], 10);
+        const usedKb = Math.max(0, totalKb - availKb);
+        const totalGb = totalKb / (1024 * 1024);
+        const usedGb = usedKb / (1024 * 1024);
+        const pct = totalKb > 0 ? (usedKb / totalKb) * 100 : 0;
+        return { usedGb, totalGb, pct };
+    } catch (_) {
+        return null;
+    }
+}
+
+export function getCpuTemp() {
+    try {
+        const thermalDir = Gio.File.new_for_path('/sys/class/thermal');
+        if (!thermalDir.query_exists(null)) return null;
+        const iter = thermalDir.enumerate_children('standard::name', Gio.FileQueryInfoFlags.NONE, null);
+        let fallbackTemp = null;
+        let info;
+        while ((info = iter.next_file(null)) !== null) {
+            const name = info.get_name();
+            if (!name.startsWith('thermal_zone')) continue;
+            const typePath = `/sys/class/thermal/${name}/type`;
+            const tempPath = `/sys/class/thermal/${name}/temp`;
+            try {
+                const [okType, typeBytes] = GLib.file_get_contents(typePath);
+                const [okTemp, tempBytes] = GLib.file_get_contents(tempPath);
+                if (!okTemp) continue;
+                const tempC = parseInt(new TextDecoder().decode(tempBytes).trim(), 10) / 1000;
+                if (isNaN(tempC)) continue;
+                const zoneType = okType ? new TextDecoder().decode(typeBytes).trim() : '';
+                if (zoneType === 'x86_pkg_temp' || zoneType === 'k10temp' || zoneType === 'cpu-thermal') {
+                    return Math.round(tempC);
+                }
+                if (fallbackTemp === null) fallbackTemp = Math.round(tempC);
+            } catch (_) {}
+        }
+        return fallbackTemp;
+    } catch (_) {
+        return null;
+    }
+}
+
+export function getDiskUsage() {
+    try {
+        const root = Gio.File.new_for_path('/');
+        const info = root.query_filesystem_info('filesystem::size,filesystem::free', null);
+        const size = info.get_attribute_uint64('filesystem::size');
+        const free = info.get_attribute_uint64('filesystem::free');
+        if (!size) return null;
+        const used = Math.max(0, size - free);
+        const gib = 1024 * 1024 * 1024;
+        return {
+            usedGb: used / gib,
+            totalGb: size / gib,
+            freeGb: free / gib,
+            pct: (used / size) * 100,
+        };
+    } catch (_) {
+        return null;
+    }
+}
+
+export function getPowerProfile() {
+    // 1. Check powerprofilesctl if available
+    if (GLib.find_program_in_path('powerprofilesctl')) {
+        try {
+            const [ok, stdout] = GLib.spawn_command_line_sync('powerprofilesctl get');
+            if (ok && stdout) {
+                const mode = new TextDecoder().decode(stdout).trim();
+                if (mode) return mode;
+            }
+        } catch (_) {}
+    }
+
+    // 2. Fallback to Intel/AMD pstate energy_performance_preference
+    try {
+        const [ok, data] = GLib.file_get_contents('/sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference');
+        if (ok) {
+            const epp = new TextDecoder().decode(data).trim();
+            if (epp === 'power' || epp === 'balance_power') return 'power-saver';
+            if (epp === 'performance') return 'performance';
+            return 'balanced';
+        }
+    } catch (_) {}
+
+    // 3. Fallback to scaling_governor
+    try {
+        const [ok, data] = GLib.file_get_contents('/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor');
+        if (ok) {
+            const gov = new TextDecoder().decode(data).trim();
+            if (gov === 'performance') return 'performance';
+            if (gov === 'powersave') return 'power-saver';
+        }
+    } catch (_) {}
+
+    return 'balanced';
+}
+
+export function setPowerProfile(profile, onDone = null) {
+    if (GLib.find_program_in_path('powerprofilesctl')) {
+        try {
+            const proc = Gio.Subprocess.new(['powerprofilesctl', 'set', profile], Gio.SubprocessFlags.NONE);
+            proc.wait_async(null, () => {
+                if (onDone) onDone(getPowerProfile());
+            });
+            return;
+        } catch (_) {}
+    }
+
+    const eppMap = {
+        'power-saver': 'power',
+        'balanced': 'balance_performance',
+        'performance': 'performance',
+    };
+    const epp = eppMap[profile] || 'balance_performance';
+    const cmd = `for f in /sys/devices/system/cpu/cpu*/cpufreq/energy_performance_preference; do echo ${epp} > "$f"; done`;
+    try {
+        const proc = Gio.Subprocess.new(['pkexec', 'sh', '-c', cmd], Gio.SubprocessFlags.NONE);
+        proc.wait_async(null, () => {
+            if (onDone) onDone(getPowerProfile());
+        });
+    } catch (_) {
+        if (onDone) onDone(getPowerProfile());
+    }
+}
+
 export const TelemetryMonitor = GObject.registerClass({
     GTypeName: 'IsleTelemetryMonitorService',
     Signals: {
@@ -256,8 +418,10 @@ export const TelemetryMonitor = GObject.registerClass({
     _init() {
         super._init();
         sampleNetworkThroughput();
+        sampleCpuUsage();
         this._timerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
             sampleNetworkThroughput();
+            sampleCpuUsage();
             this.emit('updated');
             return GLib.SOURCE_CONTINUE;
         });

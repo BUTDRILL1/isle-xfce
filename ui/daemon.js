@@ -148,6 +148,7 @@ const INTERFACES = {
             <method name="Colors"><arg type="s" direction="out"/></method>
             <method name="Parse"><arg name="text" type="s" direction="in"/><arg type="s" direction="out"/></method>
             <method name="Remove"><arg name="id" type="t" direction="in"/></method>
+            <method name="SetDesktopEvents"><arg name="events_json" type="s" direction="in"/></method>
             <method name="MeetingLink"><arg name="source_uid" type="s" direction="in"/><arg name="event_uid" type="s" direction="in"/><arg type="s" direction="out"/></method>
             <property name="Events" type="s" access="read"/>`),
         properties: { Events: 'events' },

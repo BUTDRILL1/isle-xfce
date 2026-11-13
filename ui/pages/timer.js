@@ -75,6 +75,8 @@ export const TimerPage = GObject.registerClass({
         this._alarmActive = false;
         this._alarmTimerId = 0;
 
+        globalThis.isleTimerPage = this;
+
         this._buildUi();
 
         this.watch(['pomodoro'], () => this._update());
@@ -795,7 +797,7 @@ export const TimerPage = GObject.registerClass({
             globalThis.isleShowAlert({
                 type: 'alarm',
                 timeStr,
-                labelText: 'Alarm Ringing!',
+                labelText: this._alarmLabel || 'Alarm Ringing!',
                 onDismiss: () => {
                     this._alarmHintLbl.set_text('Alarm is Off');
                 },
@@ -803,6 +805,83 @@ export const TimerPage = GObject.registerClass({
                     this._addAlarmOffset(5);
                 },
             });
+        }
+    }
+
+    startTimer(minutes = 25, label = 'Timer') {
+        const mins = Math.max(1, Math.min(180, Math.round(Number(minutes) || 25)));
+        this._setMode('timer');
+        this._setMinutes('focus_minutes', mins);
+        this.daemon.call('pomodoro', 'Start');
+        return { ok: true, detail: `${mins} minute timer started` };
+    }
+
+    setAlarm(timeStr = '07:00', label = 'Alarm') {
+        let hour = 7;
+        let min = 0;
+        if (typeof timeStr === 'string') {
+            const m = timeStr.trim().match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
+            if (m) {
+                hour = parseInt(m[1], 10);
+                min = m[2] ? parseInt(m[2], 10) : 0;
+                const ampm = m[3]?.toLowerCase();
+                if (ampm === 'pm' && hour < 12) hour += 12;
+                if (ampm === 'am' && hour === 12) hour = 0;
+            }
+        }
+        hour = Math.max(0, Math.min(23, hour));
+        min = Math.max(0, Math.min(59, min));
+
+        this._alarmHour = hour;
+        this._alarmMin = min;
+        this._alarmLabel = label || 'Alarm';
+        if (this._alarmHourVal) this._alarmHourVal.set_text(String(hour).padStart(2, '0'));
+        if (this._alarmMinVal) this._alarmMinVal.set_text(String(min).padStart(2, '0'));
+        this._renderAlarmTime();
+
+        if (!this._alarmActive) {
+            this._toggleAlarm();
+        }
+
+        // Sync with GNOME Clocks
+        this._syncGnomeClocksAlarm(this._alarmLabel, hour, min);
+
+        const pad = n => String(n).padStart(2, '0');
+        return { ok: true, detail: `alarm set for ${pad(hour)}:${pad(min)}` };
+    }
+
+    _syncGnomeClocksAlarm(name, hour, min) {
+        try {
+            const settings = new Gio.Settings({ schema_id: 'org.gnome.clocks' });
+            const existing = settings.get_value('alarms').deep_unpack();
+            const id = GLib.uuid_string_random ? GLib.uuid_string_random().replace(/-/g, '') : Math.random().toString(36).slice(2);
+
+            const now = new Date();
+            const target = new Date();
+            target.setHours(hour, min, 0, 0);
+            if (target.getTime() <= now.getTime()) {
+                target.setDate(target.getDate() + 1);
+            }
+            const pad = n => String(n).padStart(2, '0');
+            const ringTime = `${target.getFullYear()}-${pad(target.getMonth() + 1)}-${pad(target.getDate())}T${pad(hour)}:${pad(min)}:00`;
+
+            const newEntry = {
+                name: new GLib.Variant('s', name || 'Alarm'),
+                id: new GLib.Variant('s', id),
+                hour: new GLib.Variant('i', hour),
+                minute: new GLib.Variant('i', min),
+                ring_time: new GLib.Variant('s', ringTime),
+                days: new GLib.Variant('ai', []),
+                snooze_minutes: new GLib.Variant('i', 5),
+                ring_minutes: new GLib.Variant('i', 5),
+                sound_uri: new GLib.Variant('s', 'file:///usr/share/sounds/gnome/default/alarms/school-bell.oga'),
+            };
+
+            const combined = [...existing, newEntry];
+            settings.set_value('alarms', new GLib.Variant('aa{sv}', combined));
+            settings.apply();
+        } catch (e) {
+            console.warn(`Isle: could not sync alarm to gnome-clocks: ${e.message}`);
         }
     }
 });
