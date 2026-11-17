@@ -501,14 +501,30 @@ export const WifiIndicator = GObject.registerClass({
         });
         this._connected = true;
         this._bars = 3;
+        this._quality = 100;
 
         this.set_draw_func((_area, cr, w, h) => {
             const scale = h / 15.0;
             const cx = w / 2;
             const cy = h - 2.2 * scale;
 
+            // Subtle notch-blended signal tint by quality %
+            let rgb = [1, 1, 1];
+            let activeAlpha = 0.85;
+            if (!this._connected || this._quality <= 0) {
+                activeAlpha = 0.25;
+            } else if (this._quality >= 81) {
+                rgb = [0.32, 0.80, 0.45]; // soft green
+            } else if (this._quality >= 56) {
+                rgb = [0.95, 0.82, 0.25]; // warm yellow
+            } else if (this._quality >= 31) {
+                rgb = [0.95, 0.62, 0.20]; // muted orange
+            } else {
+                rgb = [0.95, 0.34, 0.30]; // soft red
+            }
+
             // Bottom dot
-            cr.setSourceRGBA(1, 1, 1, this._connected ? 0.92 : 0.25);
+            cr.setSourceRGBA(rgb[0], rgb[1], rgb[2], activeAlpha);
             cr.arc(cx, cy, 1.5 * scale, 0, Math.PI * 2);
             cr.fill();
 
@@ -520,8 +536,12 @@ export const WifiIndicator = GObject.registerClass({
             cr.setLineWidth(1.6 * scale);
 
             for (let i = 0; i < radii.length; i++) {
-                const active = this._connected && this._bars >= (i + 1);
-                cr.setSourceRGBA(1, 1, 1, active ? 0.92 : 0.22);
+                const active = this._connected && this._quality > 0 && this._bars >= (i + 1);
+                if (active) {
+                    cr.setSourceRGBA(rgb[0], rgb[1], rgb[2], activeAlpha);
+                } else {
+                    cr.setSourceRGBA(1, 1, 1, 0.20);
+                }
                 cr.newPath();
                 cr.arc(cx, cy, radii[i], startAngle, endAngle);
                 cr.stroke();
@@ -529,12 +549,14 @@ export const WifiIndicator = GObject.registerClass({
         });
     }
 
-    update({ connected = false, bars = 0 } = {}) {
+    update({ connected = false, bars = 0, quality = 0 } = {}) {
         const nextConn = Boolean(connected);
         const nextBars = Math.max(0, Math.min(3, Math.round(bars)));
-        if (nextConn === this._connected && nextBars === this._bars) return;
+        const nextQual = Math.max(0, Math.min(100, Math.round(quality)));
+        if (nextConn === this._connected && nextBars === this._bars && nextQual === this._quality) return;
         this._connected = nextConn;
         this._bars = nextBars;
+        this._quality = nextQual;
         this.queue_draw();
     }
 });
