@@ -579,6 +579,197 @@ export function getWifiSignal() {
     return { connected: false, quality: 0, bars: 0 };
 }
 
+const IGNORED_USB_PRODUCTS = [
+    /^xhci host controller$/i,
+    /^ehci host controller$/i,
+    /^linux\s+\d/i,
+    /^bluetooth radio$/i,
+    /^hp wide vision hd camera$/i,
+    /^integrated camera$/i,
+    /^usb\s*2\.0\s*hub$/i,
+    /^usb\s*3\.0\s*hub$/i,
+];
+
+function _classifyPeripheralIcon(name) {
+    const lower = (name || '').toLowerCase();
+    if (lower.includes('mouse') || lower.includes('trackball') || lower.includes('receiver') || lower.includes('dongle') || lower.includes('lightspeed') || lower.includes('unifying') || lower.includes('bolt')) {
+        return { icon: 'input-mouse-symbolic', kind: lower.includes('receiver') || lower.includes('dongle') ? '2.4GHz Wireless' : 'USB Mouse' };
+    }
+    if (lower.includes('keyboard') || lower.includes('keychron') || lower.includes('nuphy')) {
+        return { icon: 'input-keyboard-symbolic', kind: 'Keyboard' };
+    }
+    if (lower.includes('headset') || lower.includes('headphone') || lower.includes('earbud') || lower.includes('airpods') || lower.includes('dac') || lower.includes('audio') || lower.includes('mic')) {
+        return { icon: 'isle-headphones-symbolic', kind: 'Audio Device' };
+    }
+    if (lower.includes('iphone') || lower.includes('ipad') || lower.includes('android') || lower.includes('pixel') || lower.includes('galaxy') || lower.includes('phone')) {
+        return { icon: 'phone-symbolic', kind: 'Phone' };
+    }
+    if (lower.includes('controller') || lower.includes('gamepad') || lower.includes('xbox') || lower.includes('dualshock') || lower.includes('dualsense')) {
+        return { icon: 'input-gaming-symbolic', kind: 'Controller' };
+    }
+    if (lower.includes('flash') || lower.includes('storage') || lower.includes('disk') || lower.includes('ssd') || lower.includes('sandisk') || lower.includes('kingston') || lower.includes('cruzer')) {
+        return { icon: 'drive-removable-media-symbolic', kind: 'USB Storage' };
+    }
+    return { icon: 'isle-headphones-symbolic', kind: 'USB Device' };
+}
+
+let _cachedWiredJack = false;
+
+function _refreshWiredJackAsync(onChanged) {
+    if (!GLib.find_program_in_path('pactl')) return;
+    try {
+        const proc = Gio.Subprocess.new(
+            ['pactl', 'list', 'sinks'],
+            Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE
+        );
+        proc.communicate_utf8_async(null, null, (_p, res) => {
+            try {
+                const [, stdout] = proc.communicate_utf8_finish(res);
+                const text = stdout || '';
+                const hasActiveHp = /Active Port:\s*\[Out\]\s*Headphones/i.test(text)
+                    || /\[Out\]\s*Headphones:.*,\s*available\)/i.test(text);
+                if (hasActiveHp !== _cachedWiredJack) {
+                    _cachedWiredJack = hasActiveHp;
+                    if (onChanged) onChanged();
+                }
+            } catch (_) {}
+        });
+    } catch (_) {}
+}
+
+export function getConnectedPeripherals(btDevices = []) {
+    const list = [];
+    const seenNames = new Set();
+
+    // 0. 3.5mm Wired Headphones jack (PipeWire/Pulse sink port)
+    if (_cachedWiredJack) {
+        list.push({
+            name: 'Wired Headphones',
+            icon: 'isle-headphones-symbolic',
+            kind: '3.5mm Audio',
+            battery: null,
+        });
+    }
+
+    // 1. Bluetooth devices from daemon
+    if (Array.isArray(btDevices)) {
+        for (const d of btDevices) {
+            if (!d || !d.name) continue;
+            seenNames.add(d.name.toLowerCase());
+            list.push({
+                name: d.name,
+                icon: d.icon || 'isle-headphones-symbolic',
+                kind: 'Bluetooth',
+                battery: d.battery ?? null,
+            });
+        }
+    }
+
+    // 2. Peripheral batteries in /sys/class/power_supply (wireless mice, keyboards, controllers)
+    const psBatteries = new Map();
+    try {
+        const psDir = Gio.File.new_for_path('/sys/class/power_supply');
+        if (psDir.query_exists(null)) {
+            const iter = psDir.enumerate_children('standard::name', Gio.FileQueryInfoFlags.NONE, null);
+            let info;
+            while ((info = iter.next_file(null)) !== null) {
+                const entry = info.get_name();
+                if (/^(BAT\d*|AC.*|ADP.*|ucsi.*)$/i.test(entry)) continue;
+                try {
+                    const base = `/sys/class/power_supply/${entry}`;
+                    const [okCap, capBytes] = GLib.file_get_contents(`${base}/capacity`);
+                    const cap = okCap ? parseInt(new TextDecoder().decode(capBytes).trim(), 10) : null;
+                    let model = '';
+                    try {
+                        const [okMod, modBytes] = GLib.file_get_contents(`${base}/model_name`);
+                        if (okMod) model = new TextDecoder().decode(modBytes).trim();
+                    } catch (_) {}
+                    if (model && !isNaN(cap)) {
+                        psBatteries.set(model.toLowerCase(), cap);
+                    }
+                } catch (_) {}
+            }
+        }
+    } catch (_) {}
+
+    // 3. External USB devices & 2.4GHz wireless dongles from /sys/bus/usb/devices
+    try {
+        const usbDir = Gio.File.new_for_path('/sys/bus/usb/devices');
+        if (usbDir.query_exists(null)) {
+            const iter = usbDir.enumerate_children('standard::name', Gio.FileQueryInfoFlags.NONE, null);
+            let info;
+            while ((info = iter.next_file(null)) !== null) {
+                const name = info.get_name();
+                // Skip interface sub-nodes (containing ':') and root hubs ('usb1', 'usb2'...)
+                if (name.includes(':') || /^usb\d+$/i.test(name)) continue;
+                const prodPath = `/sys/bus/usb/devices/${name}/product`;
+                if (!GLib.file_test(prodPath, GLib.FileTest.EXISTS)) continue;
+                try {
+                    const [okProd, prodBytes] = GLib.file_get_contents(prodPath);
+                    if (!okProd) continue;
+                    const prod = new TextDecoder().decode(prodBytes).trim();
+                    if (!prod || IGNORED_USB_PRODUCTS.some(re => re.test(prod))) continue;
+
+                    let mfg = '';
+                    const mfgPath = `/sys/bus/usb/devices/${name}/manufacturer`;
+                    if (GLib.file_test(mfgPath, GLib.FileTest.EXISTS)) {
+                        try {
+                            const [okMfg, mfgBytes] = GLib.file_get_contents(mfgPath);
+                            if (okMfg) mfg = new TextDecoder().decode(mfgBytes).trim();
+                        } catch (_) {}
+                    }
+                    const fullName = (mfg && !prod.toLowerCase().startsWith(mfg.toLowerCase()) && !/^linux|generic$/i.test(mfg))
+                        ? `${mfg} ${prod}`
+                        : prod;
+                    const key = fullName.toLowerCase();
+                    if (seenNames.has(key)) continue;
+                    seenNames.add(key);
+
+                    const meta = _classifyPeripheralIcon(fullName);
+                    const bat = psBatteries.get(prod.toLowerCase()) ?? psBatteries.get(key) ?? null;
+                    list.push({
+                        name: fullName,
+                        icon: meta.icon,
+                        kind: meta.kind,
+                        battery: bat,
+                    });
+                } catch (_) {}
+            }
+        }
+    } catch (_) {}
+
+    // 4. External displays from /sys/class/drm/card*-*
+    try {
+        const drmDir = Gio.File.new_for_path('/sys/class/drm');
+        if (drmDir.query_exists(null)) {
+            const iter = drmDir.enumerate_children('standard::name', Gio.FileQueryInfoFlags.NONE, null);
+            let info;
+            while ((info = iter.next_file(null)) !== null) {
+                const name = info.get_name();
+                const m = name.match(/^card\d+-(.+)$/);
+                if (!m) continue;
+                const conn = m[1];
+                if (/^(eDP|LVDS|DSI|Writeback)/i.test(conn)) continue;
+                const statusPath = `/sys/class/drm/${name}/status`;
+                if (!GLib.file_test(statusPath, GLib.FileTest.EXISTS)) continue;
+                try {
+                    const [okS, sBytes] = GLib.file_get_contents(statusPath);
+                    if (okS && new TextDecoder().decode(sBytes).trim() === 'connected') {
+                        list.push({
+                            name: `External Display (${conn})`,
+                            icon: 'video-display-symbolic',
+                            kind: 'Display',
+                            battery: null,
+                        });
+                    }
+                } catch (_) {}
+            }
+        }
+    } catch (_) {}
+
+    return list;
+}
+
 function _parseWpctlVolume(stdout) {
     if (!stdout) return null;
     const m = stdout.match(/Volume:\s*([0-9.]+)/);
@@ -627,10 +818,11 @@ export const TelemetryMonitor = GObject.registerClass({
             setPowerProfile('performance', () => this.emit('power-changed'));
         }
 
-        // Initial audio volume fetch and real-time pactl subscribe listener
+        // Initial audio volume + wired jack fetch and real-time pactl subscribe listener
         this._pactlActive = false;
         this._pactlProc = null;
         _refreshAudioVolumeAsync(() => this.emit('volume-changed'));
+        _refreshWiredJackAsync(() => this.emit('updated'));
         this._startPactlSubscribe();
 
         this._timerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
@@ -670,8 +862,9 @@ export const TelemetryMonitor = GObject.registerClass({
                             return;
                         }
                         const line = new TextDecoder().decode(lineBytes);
-                        if (line.includes('sink') || line.includes('server')) {
+                        if (line.includes('sink') || line.includes('server') || line.includes('card')) {
                             _refreshAudioVolumeAsync(() => this.emit('volume-changed'));
+                            _refreshWiredJackAsync(() => this.emit('updated'));
                         }
                         readNext();
                     } catch (_) {

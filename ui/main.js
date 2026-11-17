@@ -92,7 +92,7 @@ export function init() {
     const shelfPage = new ShelfPage(daemon);
     const calendarPage = new CalendarPage(daemon);
     const appsPage = new AppsPage(daemon);
-    const devicesPage = new DevicesPage(daemon);
+    const devicesPage = new DevicesPage(daemon, { notificationCenter });
     const usagePage = new UsagePage(daemon);
 
     const callPage = new Page(daemon, {

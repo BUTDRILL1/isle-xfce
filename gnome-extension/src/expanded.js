@@ -9,12 +9,12 @@ import GLib from 'gi://GLib';
 import GObject from 'gi://GObject';
 import St from 'gi://St';
 
-import {timerColor} from './compact.js';
-import {VERTICAL, onUiScale, px, uiScale} from './compat.js';
+import { timerColor } from './compact.js';
+import { VERTICAL, onUiScale, px, uiScale } from './compat.js';
 import * as Format from './format.js';
 import * as Playback from './playback.js';
-import {watchClock} from './wallClock.js';
-import {Bars, PrivacyDots, RecordingDot, Ring, easeTo, fence, icon, iconButton, label, slideBy} from './widgets.js';
+import { watchClock } from './wallClock.js';
+import { Bars, PrivacyDots, RecordingDot, Ring, easeTo, fence, icon, iconButton, label, slideBy } from './widgets.js';
 
 /** Sizes and distances in CSS pixels (see `px`). */
 export const EXPANDED_WIDTH = 600;
@@ -31,19 +31,19 @@ export const BOTTOM_PADDING = 20;
 
 /** Each page's tab: its icon, and the label shown while it is open. */
 const TABS = {
-    call: {icon: 'isle-phone', label: 'Call'},
-    music: {icon: 'isle-music', label: 'Music'},
-    notifications: {icon: 'isle-bell', label: 'Notifications'},
-    focus: {icon: 'isle-timer', label: 'Timer'},
-    reminders: {icon: 'isle-tasks', label: 'Reminders'},
-    shelf: {icon: 'isle-shelf', label: 'Shelf'},
-    calendar: {icon: 'isle-calendar', label: 'Calendar'},
-    apps: {icon: 'isle-apps', label: 'Apps'},
-    devices: {icon: 'isle-headphones', label: 'Devices'},
-    usage: {icon: 'isle-gauge', label: 'Usage'},
+    call: { icon: 'isle-phone', label: 'Call' },
+    music: { icon: 'isle-music', label: 'Music' },
+    notifications: { icon: 'isle-bell', label: 'Notifications' },
+    focus: { icon: 'isle-timer', label: 'Timer' },
+    reminders: { icon: 'isle-tasks', label: 'Reminders' },
+    shelf: { icon: 'isle-shelf', label: 'Shelf' },
+    calendar: { icon: 'isle-calendar', label: 'Calendar' },
+    apps: { icon: 'isle-apps', label: 'Apps' },
+    devices: { icon: 'isle-headphones', label: 'Status' },
+    usage: { icon: 'isle-gauge', label: 'Usage' },
 };
 /** How bright a tab's icon is: open, under the pointer, otherwise. */
-const TAB_OPACITY = {open: 255, hover: 200, idle: 140};
+const TAB_OPACITY = { open: 255, hover: 200, idle: 140 };
 /** The settings icon's, as bright as the sparkle's colour (0.6) beside it. */
 const SETTINGS_OPACITY = 153;
 
@@ -78,7 +78,7 @@ export const ExpandedView = GObject.registerClass({
         // The current page's tint colour changed; see `tint`.
         'tint-changed': {},
         // The current page's 'aura' tint moved: time (s), level (0..1).
-        'tint-motion': {param_types: [GObject.TYPE_DOUBLE, GObject.TYPE_DOUBLE]},
+        'tint-motion': { param_types: [GObject.TYPE_DOUBLE, GObject.TYPE_DOUBLE] },
         // The mic button: open the voice assistant.
         'voice-requested': {},
         // The gear by the clock: Isle's settings.
@@ -87,7 +87,7 @@ export const ExpandedView = GObject.registerClass({
 }, class ExpandedView extends St.BoxLayout {
     /** `privacy` and `call` feed the header's status; `pages` are built by the island, in tab order. */
     _init(daemon, privacy, call, settings, pages) {
-        super._init({...VERTICAL, style_class: 'isle-expanded', width: px(EXPANDED_WIDTH)});
+        super._init({ ...VERTICAL, style_class: 'isle-expanded', width: px(EXPANDED_WIDTH) });
         this._daemon = daemon;
         this._privacy = privacy;
         this._call = call;
@@ -101,7 +101,7 @@ export const ExpandedView = GObject.registerClass({
         this._smoothScrolling = false;
         this._lastFlip = 0;
         /** The scroll gesture over the header in progress: travel so far, and whether it turned a page. */
-        this._gesture = {dx: 0, dy: 0, flipped: false, at: 0};
+        this._gesture = { dx: 0, dy: 0, flipped: false, at: 0 };
         // Before any page sees them (Usage steps through its providers by scrolls).
         this.connect('captured-event', (_actor, event) => this._dropScrollCopies(event));
 
@@ -155,7 +155,7 @@ export const ExpandedView = GObject.registerClass({
         onUiScale(this, () => {
             this._nameWidths.clear();
             this._syncTabs();
-        }, {now: false});
+        }, { now: false });
         this._themeChanged = St.ThemeContext.get_for_stage(global.stage).connect('changed', () => this._nameWidths.clear());
         this.connect('destroy', () => this._onDestroy());
     }
@@ -163,15 +163,15 @@ export const ExpandedView = GObject.registerClass({
     /** Tabs on the left, status and clock on the right. */
     _buildHeader() {
         // Reactive from the start (never toggled, no hover tracked): scrolls over it turn pages.
-        const header = new St.Widget({layout_manager: new Clutter.BinLayout(), style_class: 'isle-header', reactive: true});
+        const header = new St.Widget({ layout_manager: new Clutter.BinLayout(), style_class: 'isle-header', reactive: true });
         header.connect('scroll-event', (_actor, event) => this._flipFromScroll(event));
         this._tabsBox = this._buildTabs();
         header.add_child(this._tabsBox);
 
         // Right: a running recording (click to stop), privacy dots, music, the focus ring and the clock.
         // A call has its own green tab on the left.
-        const status = this._status = new St.BoxLayout({style_class: 'isle-header-status', x_expand: true, x_align: Clutter.ActorAlign.END, y_align: Clutter.ActorAlign.CENTER});
-        const recordingBox = new St.BoxLayout({style_class: 'isle-recording-pill-box'});
+        const status = this._status = new St.BoxLayout({ style_class: 'isle-header-status', x_expand: true, x_align: Clutter.ActorAlign.END, y_align: Clutter.ActorAlign.CENTER });
+        const recordingBox = new St.BoxLayout({ style_class: 'isle-recording-pill-box' });
         recordingBox.add_child(new RecordingDot());
         this._recordingTime = label('', 'isle-recording-time');
         recordingBox.add_child(this._recordingTime);
@@ -184,22 +184,22 @@ export const ExpandedView = GObject.registerClass({
         });
         this._recordingButton.connect('clicked', () => this._privacy.stopRecording());
         this._privacyDots = new PrivacyDots();
-        this._headerBars = new Bars({height: 14});
+        this._headerBars = new Bars({ height: 14 });
         status.add_child(this._recordingButton);
         status.add_child(this._privacyDots);
         status.add_child(this._headerBars);
         // The assistant, as AI rather than a microphone: it listens, and it can be typed to.
         this._micButton = iconButton('isle-sparkle-symbolic', 'isle-button-flat isle-header-mic',
-            () => this.emit('voice-requested'), {size: 15, accessibleName: 'AI assistant'});
+            () => this.emit('voice-requested'), { size: 15, accessibleName: 'AI assistant' });
         status.add_child(this._micButton);
 
-        const clock = new St.BoxLayout({y_align: Clutter.ActorAlign.CENTER, style_class: 'isle-header-clock'});
-        this._headerRing = new Ring({size: 15, lineWidth: 2.5});
+        const clock = new St.BoxLayout({ y_align: Clutter.ActorAlign.CENTER, style_class: 'isle-header-clock' });
+        this._headerRing = new Ring({ size: 15, lineWidth: 2.5 });
         this._date = label('', 'isle-header-date');
-        this._time = label('', 'isle-header-time', {y_align: Clutter.ActorAlign.END});
+        this._time = label('', 'isle-header-time', { y_align: Clutter.ActorAlign.END });
         // With a 12-hour clock, AM or PM after it, smaller (a label of its own, as in the closed island).
-        this._meridiem = label('', 'isle-header-meridiem', {y_align: Clutter.ActorAlign.END, visible: false});
-        const time = new St.BoxLayout({style_class: 'isle-header-time-box', y_align: Clutter.ActorAlign.CENTER});
+        this._meridiem = label('', 'isle-header-meridiem', { y_align: Clutter.ActorAlign.END, visible: false });
+        const time = new St.BoxLayout({ style_class: 'isle-header-time-box', y_align: Clutter.ActorAlign.CENTER });
         time.add_child(this._time);
         time.add_child(this._meridiem);
         clock.add_child(this._headerRing);
@@ -207,10 +207,10 @@ export const ExpandedView = GObject.registerClass({
         clock.add_child(time);
         status.add_child(clock);
         const settings = iconButton('isle-settings', 'isle-button-flat isle-header-settings',
-            () => this.emit('settings-requested'), {size: 15, accessibleName: 'Settings'});
+            () => this.emit('settings-requested'), { size: 15, accessibleName: 'Settings' });
         // Its icon is an image, which takes no CSS colour: dimmed as the sparkle beside it, lit under the pointer.
         settings.child.opacity = SETTINGS_OPACITY;
-        settings.connect('notify::hover', () => settings.child.ease({opacity: settings.hover ? 255 : SETTINGS_OPACITY, duration: 120}));
+        settings.connect('notify::hover', () => settings.child.ease({ opacity: settings.hover ? 255 : SETTINGS_OPACITY, duration: 120 }));
         status.add_child(settings);
         header.add_child(status);
         return header;
@@ -225,13 +225,13 @@ export const ExpandedView = GObject.registerClass({
 
     /** A tab per page; the open one is lit and says its name. */
     _buildTabs() {
-        const tabs = new St.BoxLayout({style_class: 'isle-tabs', x_expand: true, x_align: Clutter.ActorAlign.START, y_align: Clutter.ActorAlign.CENTER});
+        const tabs = new St.BoxLayout({ style_class: 'isle-tabs', x_expand: true, x_align: Clutter.ActorAlign.START, y_align: Clutter.ActorAlign.CENTER });
         /** The open name's width per tab, measured once (see `_syncTabs`). */
         this._nameWidths = new Map();
         this._tabs = this._pages.map((page, index) => {
-            const {icon: iconName, label: text} = TABS[page.name];
-            const glyph = new St.Widget({layout_manager: new Clutter.BinLayout(), y_align: Clutter.ActorAlign.CENTER});
-            const tabIcon = new St.Icon({gicon: icon(iconName), icon_size: 16});
+            const { icon: iconName, label: text } = TABS[page.name];
+            const glyph = new St.Widget({ layout_manager: new Clutter.BinLayout(), y_align: Clutter.ActorAlign.CENTER });
+            const tabIcon = new St.Icon({ gicon: icon(iconName), icon_size: 16 });
             glyph.add_child(tabIcon);
             // Something new waits on this page (unseen notifications).
             const badge = new St.Widget({
@@ -243,11 +243,11 @@ export const ExpandedView = GObject.registerClass({
                 visible: false,
             });
             glyph.add_child(badge);
-            const name = label(text, 'isle-tab-label', {y_align: Clutter.ActorAlign.CENTER});
+            const name = label(text, 'isle-tab-label', { y_align: Clutter.ActorAlign.CENTER });
             // The name opens and closes by width, so the tabs beside it slide over instead of jumping.
-            const nameClip = new St.Widget({layout_manager: new Clutter.BinLayout(), clip_to_allocation: true, width: 0, y_align: Clutter.ActorAlign.CENTER});
+            const nameClip = new St.Widget({ layout_manager: new Clutter.BinLayout(), clip_to_allocation: true, width: 0, y_align: Clutter.ActorAlign.CENTER });
             nameClip.add_child(name);
-            const box = new St.BoxLayout({style_class: 'isle-tab-box'});
+            const box = new St.BoxLayout({ style_class: 'isle-tab-box' });
             box.add_child(glyph);
             box.add_child(nameClip);
             const tab = new St.Button({
@@ -263,7 +263,7 @@ export const ExpandedView = GObject.registerClass({
             tab.connect('notify::hover', () => this._syncTabIcon(this._tabs[index]));
             tabs.add_child(tab);
             // Drawn in lines; filled while its page is open (`-fill`, see `_syncTabs`).
-            return {tab, icon: tabIcon, name, nameClip, badge, gicons: [icon(iconName), icon(`${iconName}-fill`)]};
+            return { tab, icon: tabIcon, name, nameClip, badge, gicons: [icon(iconName), icon(`${iconName}-fill`)] };
         });
         return tabs;
     }
@@ -272,19 +272,19 @@ export const ExpandedView = GObject.registerClass({
     _syncTabIcon(entry) {
         if (!entry)
             return;
-        const {tab, icon: tabIcon} = entry;
+        const { tab, icon: tabIcon } = entry;
         // 150 ms, as the tab's background in the stylesheet.
         const open = this._tabs[this._index] === entry;
         const opacity = TAB_OPACITY[open ? 'open' : tab.hover ? 'hover' : 'idle'];
         if (tabIcon.opacity !== opacity)
-            easeTo(tabIcon, {opacity}, 150);
+            easeTo(tabIcon, { opacity }, 150);
     }
 
     /** Lights the open page's tab and shows which pages have news. */
     _syncTabs() {
         const animate = this.mapped && St.Settings.get().enable_animations;
         this._tabs.forEach((entry, index) => {
-            const {tab, icon: tabIcon, gicons, name, nameClip, badge} = entry;
+            const { tab, icon: tabIcon, gicons, name, nameClip, badge } = entry;
             const open = index === this._index;
             const available = this._pages[index].available;
             if (tab.visible !== available)
@@ -319,8 +319,8 @@ export const ExpandedView = GObject.registerClass({
             nameClip.remove_all_transitions();
             name.remove_all_transitions();
             if (animate) {
-                easeTo(nameClip, {width}, SLIDE_DURATION, Clutter.AnimationMode.EASE_OUT_CUBIC);
-                easeTo(name, {opacity: open ? 255 : 0}, SLIDE_DURATION);
+                easeTo(nameClip, { width }, SLIDE_DURATION, Clutter.AnimationMode.EASE_OUT_CUBIC);
+                easeTo(name, { opacity: open ? 255 : 0 }, SLIDE_DURATION);
             } else {
                 nameClip.width = width;
                 name.opacity = open ? 255 : 0;
@@ -333,7 +333,7 @@ export const ExpandedView = GObject.registerClass({
 
     /** Every page stacked in one clipped area, only the open one shown. */
     _buildPager() {
-        const area = this._pagerArea = new St.Widget({layout_manager: new Clutter.BinLayout()});
+        const area = this._pagerArea = new St.Widget({ layout_manager: new Clutter.BinLayout() });
 
         this._pager = new St.Widget({
             layout_manager: new Clutter.BinLayout(),
@@ -410,7 +410,7 @@ export const ExpandedView = GObject.registerClass({
         // are measured in the open one's font: the others, never shown yet, may not be styled.
         const longest = this._longestName();
         // The tabs without their names, whose widths ease while switching, then room for the longest name.
-        const shown = this._tabs.reduce((sum, {nameClip}) => sum + nameClip.width, 0);
+        const shown = this._tabs.reduce((sum, { nameClip }) => sum + nameClip.width, 0);
         const [, tabs] = this._tabsBox.get_preferred_width(-1);
         const [, status] = this._status.get_preferred_width(-1);
         return Math.ceil(tabs - shown + longest + status +
@@ -427,9 +427,9 @@ export const ExpandedView = GObject.registerClass({
         if (this._names?.font !== font) {
             // The open name's own margin (its gap from the icon), the same for every name.
             const gap = openName.get_preferred_width(-1)[1] - openName.clutter_text.get_preferred_width(-1)[1];
-            const widest = Math.max(...this._tabs.map(({name}) =>
+            const widest = Math.max(...this._tabs.map(({ name }) =>
                 openName.clutter_text.create_pango_layout(name.text).get_pixel_size()[0]));
-            this._names = {font, width: gap + widest};
+            this._names = { font, width: gap + widest };
         }
         return this._names.width;
     }
@@ -476,7 +476,7 @@ export const ExpandedView = GObject.registerClass({
         if (this._tabsWarmed || !this.mapped)
             return;
         this._tabsWarmed = true;
-        for (const {tab} of this._tabs) {
+        for (const { tab } of this._tabs) {
             for (const pseudo of ['checked', 'hover']) {
                 if (tab.has_style_pseudo_class(pseudo))
                     continue;
@@ -492,7 +492,7 @@ export const ExpandedView = GObject.registerClass({
     }
 
     /** Shows the page at `index` (or with `name`), sliding in from its side. */
-    showPage(target, {animate = true} = {}) {
+    showPage(target, { animate = true } = {}) {
         const index = typeof target === 'string'
             ? this._pages.findIndex(page => page.name === target)
             : target;
@@ -514,7 +514,7 @@ export const ExpandedView = GObject.registerClass({
             this._sliding = true;
             const distance = px(SLIDE_DISTANCE);
             // Whole pixels (see `slideBy`), the fades eased as before.
-            slideBy(previous, 'x', previous.translation_x, -direction * distance, {duration: SLIDE_DURATION});
+            slideBy(previous, 'x', previous.translation_x, -direction * distance, { duration: SLIDE_DURATION });
             previous.ease({
                 opacity: 0,
                 duration: SLIDE_DURATION,
@@ -527,7 +527,7 @@ export const ExpandedView = GObject.registerClass({
                 },
             });
             next.opacity = 0;
-            slideBy(next, 'x', direction * distance, 0, {duration: SLIDE_DURATION});
+            slideBy(next, 'x', direction * distance, 0, { duration: SLIDE_DURATION });
             next.ease({
                 opacity: 255,
                 duration: SLIDE_DURATION,
@@ -590,7 +590,7 @@ export const ExpandedView = GObject.registerClass({
         if (index === null)
             return;
         this._automatic = true;
-        this.showPage(index, {animate: this._active});
+        this.showPage(index, { animate: this._active });
         this._automatic = false;
     }
 
@@ -643,8 +643,10 @@ export const ExpandedView = GObject.registerClass({
         if (this._room || !stage || !this.mapped || this.opacity === 0)
             return;
         const sync = () => this._syncRoom();
-        this._room = {stage, page: this.page, stageId: stage.connect('notify::width', sync),
-            ids: ['notify::x', 'notify::translation-x', 'notify::mapped'].map(signal => this.connect(signal, sync))};
+        this._room = {
+            stage, page: this.page, stageId: stage.connect('notify::width', sync),
+            ids: ['notify::x', 'notify::translation-x', 'notify::mapped'].map(signal => this.connect(signal, sync))
+        };
         sync();
     }
 
@@ -664,7 +666,7 @@ export const ExpandedView = GObject.registerClass({
 
     /** Focus ring, music bars, privacy dots and the recording pill. */
     _updateHeader() {
-        const {nowPlaying, pomodoro} = this._daemon.state;
+        const { nowPlaying, pomodoro } = this._daemon.state;
         const timerActive = pomodoro && pomodoro.phase !== 'idle';
         this._headerRing.visible = Boolean(timerActive);
         if (timerActive) {
@@ -682,7 +684,7 @@ export const ExpandedView = GObject.registerClass({
         const privacy = this._settings.get_boolean('privacy-indicators') ? this._privacy : {};
         // On a call the microphone is a given (the green Call tab says so), unless another app records too.
         const microphone = privacy.microphone && (!this._call.active || this._call.othersRecording);
-        this._privacyDots.update({camera: privacy.camera, microphone, screenShare: privacy.screenShare});
+        this._privacyDots.update({ camera: privacy.camera, microphone, screenShare: privacy.screenShare });
         this._recordingButton.visible = this._privacy.recording;
         if (this._privacy.recording && this._active)
             this._tickRecording();
@@ -715,7 +717,7 @@ export const ExpandedView = GObject.registerClass({
     _tickClock() {
         const now = GLib.DateTime.new_now_local();
         this._date.text = Format.longDate(now);
-        const {time, meridiem} = Format.clockParts(now);
+        const { time, meridiem } = Format.clockParts(now);
         this._time.text = time;
         this._meridiem.text = meridiem;
         this._meridiem.visible = Boolean(meridiem);
@@ -742,30 +744,30 @@ export const ExpandedView = GObject.registerClass({
         const now = GLib.get_monotonic_time() / 1000;
         let step = 0;
         switch (event.get_scroll_direction()) {
-        case Clutter.ScrollDirection.DOWN:
-        case Clutter.ScrollDirection.RIGHT:
-            step = 1;
-            break;
-        case Clutter.ScrollDirection.UP:
-        case Clutter.ScrollDirection.LEFT:
-            step = -1;
-            break;
-        case Clutter.ScrollDirection.SMOOTH: {
-            // The whole gesture picks the axis, so a wobble does not switch it.
-            const travel = Math.abs(gesture.dx) > Math.abs(gesture.dy) ? gesture.dx : gesture.dy;
-            const wheel = event.get_scroll_source() === Clutter.ScrollSource.WHEEL;
-            if (gesture.flipped || Math.abs(travel) < (wheel ? WHEEL_STEP : SWIPE_STEP))
-                return Clutter.EVENT_STOP;
-            step = Math.sign(travel);
-            if (wheel) {
-                // Count afresh, so a long spin turns again.
-                gesture.dx = gesture.dy = 0;
-            } else {
-                // One page a swipe, however far it goes.
-                gesture.flipped = true;
+            case Clutter.ScrollDirection.DOWN:
+            case Clutter.ScrollDirection.RIGHT:
+                step = 1;
+                break;
+            case Clutter.ScrollDirection.UP:
+            case Clutter.ScrollDirection.LEFT:
+                step = -1;
+                break;
+            case Clutter.ScrollDirection.SMOOTH: {
+                // The whole gesture picks the axis, so a wobble does not switch it.
+                const travel = Math.abs(gesture.dx) > Math.abs(gesture.dy) ? gesture.dx : gesture.dy;
+                const wheel = event.get_scroll_source() === Clutter.ScrollSource.WHEEL;
+                if (gesture.flipped || Math.abs(travel) < (wheel ? WHEEL_STEP : SWIPE_STEP))
+                    return Clutter.EVENT_STOP;
+                step = Math.sign(travel);
+                if (wheel) {
+                    // Count afresh, so a long spin turns again.
+                    gesture.dx = gesture.dy = 0;
+                } else {
+                    // One page a swipe, however far it goes.
+                    gesture.flipped = true;
+                }
+                break;
             }
-            break;
-        }
         }
         if (!step)
             return Clutter.EVENT_STOP;
@@ -785,7 +787,7 @@ export const ExpandedView = GObject.registerClass({
         const now = GLib.get_monotonic_time() / 1000;
         const gesture = this._gesture;
         if (now - gesture.at > GESTURE_GAP_MS)
-            Object.assign(gesture, {dx: 0, dy: 0, flipped: false});
+            Object.assign(gesture, { dx: 0, dy: 0, flipped: false });
         gesture.at = now;
         let stopped = event.get_scroll_finish_flags() !== Clutter.ScrollFinishFlags.NONE;
         if (event.get_scroll_direction() === Clutter.ScrollDirection.SMOOTH) {

@@ -48,7 +48,7 @@ export const TABS = {
     shelf: { icon: 'isle-shelf', label: 'Shelf' },
     calendar: { icon: 'isle-calendar', label: 'Calendar' },
     apps: { icon: 'isle-apps', label: 'Apps' },
-    devices: { icon: 'isle-headphones', label: 'Devices' },
+    devices: { icon: 'isle-headphones', label: 'Status' },
     usage: { icon: 'isle-gauge', label: 'Usage' },
 };
 
