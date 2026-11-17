@@ -11,10 +11,15 @@ import Gtk from 'gi://Gtk?version=4.0';
 import Pango from 'gi://Pango';
 
 import * as Format from './format.js';
-import * as Playback from './playback.js';
 import { paletteFor } from './bot.js';
-import { getPowerProfile, getTelemetryMonitor } from './telemetry.js';
-import { Bars, BotIcon, PrivacyDots, Ring, icon, label, pillButton } from './widgets.js';
+import {
+    getBatteryTelemetry,
+    getCachedVolume,
+    getPowerProfile,
+    getTelemetryMonitor,
+    getWifiSignal,
+} from './telemetry.js';
+import { BotIcon, PrivacyDots, Ring, WifiIndicator, icon, label, pillButton } from './widgets.js';
 
 const POWER_COLORS = {
     'power-saver': '#ffd60a',
@@ -32,7 +37,8 @@ export const CompactView = GObject.registerClass({
     _init(daemon = null) {
         super._init({
             orientation: Gtk.Orientation.HORIZONTAL,
-            halign: Gtk.Align.CENTER,
+            hexpand: true,
+            halign: Gtk.Align.FILL,
             valign: Gtk.Align.CENTER,
             css_classes: ['isle-compact'],
         });
@@ -45,8 +51,9 @@ export const CompactView = GObject.registerClass({
         this._stack = new Gtk.Stack({
             transition_type: Gtk.StackTransitionType.CROSSFADE,
             transition_duration: 180,
+            hexpand: true,
             valign: Gtk.Align.CENTER,
-            halign: Gtk.Align.CENTER,
+            halign: Gtk.Align.FILL,
             hhomogeneous: false,
             vhomogeneous: false,
         });
@@ -55,32 +62,49 @@ export const CompactView = GObject.registerClass({
         // ── 1. Main Resting Row ──────────────────────────────────────────
         const mainRow = new Gtk.Box({
             orientation: Gtk.Orientation.HORIZONTAL,
-            spacing: 8,
+            spacing: 4,
             hexpand: true,
             vexpand: true,
             valign: Gtk.Align.CENTER,
             css_classes: ['isle-compact-row'],
         });
 
-        // Left Slot: leading activity (Bot avatar)
+        // Left Slot: stacked battery digits + Bot avatar
         this._leftSlot = new Gtk.Box({
             orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 6,
             halign: Gtk.Align.START,
             valign: Gtk.Align.CENTER,
             css_classes: ['isle-compact-slot', 'isle-compact-start'],
         });
-        this._botAvatar = new BotIcon(20, { shape: 'cloud', color: 'cloud', glow: 'match' });
+        this._batStack = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 0,
+            valign: Gtk.Align.CENTER,
+            halign: Gtk.Align.CENTER,
+            css_classes: ['isle-compact-vstat'],
+        });
+        this._batTop = label('', 'isle-compact-vdigit', { halign: Gtk.Align.CENTER });
+        this._batBot = label('', 'isle-compact-vdigit', { halign: Gtk.Align.CENTER });
+        this._batStack.append(this._batTop);
+        this._batStack.append(this._batBot);
+        this._leftSlot.append(this._batStack);
+
+        this._botAvatar = new BotIcon(24, { shape: 'cloud', color: 'cloud', glow: 'match' });
         this._leftSlot.append(this._botAvatar);
         mainRow.append(this._leftSlot);
 
         this._syncBotPowerColor();
         this._telemetryMonitor = getTelemetryMonitor();
         this._telemetryMonitor.connect('power-changed', () => this._syncBotPowerColor());
+        this._telemetryMonitor.connect('updated', () => this._syncCompactStats());
+        this._telemetryMonitor.connect('volume-changed', () => this._syncVolumeLabel());
 
         // Center Slot: Date, Time, and Meridiem
         this._centerBox = new Gtk.Box({
             orientation: Gtk.Orientation.HORIZONTAL,
-            spacing: 4,
+            spacing: 3,
+            hexpand: true,
             halign: Gtk.Align.CENTER,
             valign: Gtk.Align.CENTER,
             css_classes: ['isle-compact-clock-box'],
@@ -107,20 +131,36 @@ export const CompactView = GObject.registerClass({
         }
         mainRow.append(this._centerBox);
 
-        // Right Slot: trailing activity (Audio equalizer bars + Privacy dot)
+        // Right Slot: dynamic Wi-Fi + vertical live Sound + Privacy dot
         this._rightSlot = new Gtk.Box({
             orientation: Gtk.Orientation.HORIZONTAL,
-            spacing: 6,
+            spacing: 7,
             halign: Gtk.Align.END,
             valign: Gtk.Align.CENTER,
             css_classes: ['isle-compact-slot', 'isle-compact-end', 'isle-compact-trail'],
         });
 
-        this._audioBars = new Bars({ height: 14 });
-        this._rightSlot.append(this._audioBars);
+        this._wifiIndicator = new WifiIndicator({ width: 18, height: 15 });
+        this._rightSlot.append(this._wifiIndicator);
+
+        this._volStack = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 0,
+            valign: Gtk.Align.CENTER,
+            halign: Gtk.Align.CENTER,
+            css_classes: ['isle-compact-vstat'],
+        });
+        this._volTop = label('', 'isle-compact-vdigit', { halign: Gtk.Align.CENTER });
+        this._volBot = label('', 'isle-compact-vdigit', { halign: Gtk.Align.CENTER });
+        this._volStack.append(this._volTop);
+        this._volStack.append(this._volBot);
+        this._rightSlot.append(this._volStack);
 
         this._privacyDots = new PrivacyDots();
         this._rightSlot.append(this._privacyDots);
+
+        this._syncCompactStats();
+        this._syncVolumeLabel();
 
         mainRow.append(this._rightSlot);
         this._stack.add_named(mainRow, 'main');
@@ -274,9 +314,8 @@ export const CompactView = GObject.registerClass({
 
         if (this._daemon) {
             this._daemon.connect('changed', (_daemon, key) => {
-                if (key === 'nowPlaying') {
-                    const isPlaying = Playback.isPlaying(this._daemon.state.nowPlaying);
-                    this._audioBars.set_opacity(isPlaying ? 1.0 : 0.43);
+                if (key === 'system') {
+                    this._syncCompactStats();
                 }
             });
         }
@@ -365,6 +404,48 @@ export const CompactView = GObject.registerClass({
         const win = this.get_root();
         if (win && win.has_css_class('isle-mode-peek')) {
             win.remove_css_class('isle-mode-peek');
+        }
+    }
+
+    _setVerticalDigits(stack, topLbl, botLbl, value) {
+        if (value >= 100) {
+            const s = String(Math.round(value));
+            topLbl.set_text(s.slice(0, 2));
+            botLbl.set_text(s.slice(2));
+        } else {
+            const s = String(Math.max(0, Math.round(value))).padStart(2, '0');
+            topLbl.set_text(s[0]);
+            botLbl.set_text(s[1]);
+        }
+    }
+
+    _syncCompactStats() {
+        if (this._batStack && this._batTop && this._batBot) {
+            const bat = getBatteryTelemetry(this._daemon?.state?.system?.battery);
+            if (bat) {
+                this._setVerticalDigits(this._batStack, this._batTop, this._batBot, bat.percent);
+                if (bat.isCharging) this._batStack.add_css_class('charging');
+                else this._batStack.remove_css_class('charging');
+            }
+        }
+        if (this._wifiIndicator) {
+            this._wifiIndicator.update(getWifiSignal());
+        }
+    }
+
+    _syncVolumeLabel() {
+        if (!this._volStack || !this._volTop || !this._volBot) return;
+        const vol = getCachedVolume();
+        if (vol.muted) {
+            this._volTop.set_text('M');
+            this._volBot.set_text('-');
+            this._volStack.add_css_class('muted');
+            this._volStack.remove_css_class('boost');
+        } else {
+            this._setVerticalDigits(this._volStack, this._volTop, this._volBot, vol.percent);
+            this._volStack.remove_css_class('muted');
+            if (vol.percent > 100) this._volStack.add_css_class('boost');
+            else this._volStack.remove_css_class('boost');
         }
     }
 

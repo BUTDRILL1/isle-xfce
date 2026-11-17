@@ -9,6 +9,7 @@ import GObject from 'gi://GObject';
 import Gtk from 'gi://Gtk?version=4.0';
 
 import * as Format from './format.js';
+import * as Playback from './playback.js';
 import { AssistantView } from './assistant.js';
 import { SettingsPage } from './pages/settings.js';
 import {
@@ -85,6 +86,13 @@ export const ExpandedView = GObject.registerClass({
         this.set_size_request(-1, -1);
 
         this._daemon = daemon || { state: {} };
+        if (typeof this._daemon.connect === 'function') {
+            this._daemon.connect('changed', (_daemon, key) => {
+                if (key === 'nowPlaying' && this._active) {
+                    this._updateHeader();
+                }
+            });
+        }
         this._privacy = privacy || {};
         this._call = call || { active: false };
         this._settings = settings || {};
@@ -842,9 +850,9 @@ export const ExpandedView = GObject.registerClass({
     }
 
     _updateHeader() {
-        // Equalizer Bars: show if music is playing
+        // Equalizer Bars: show flat line when paused, bouncing when music is playing
         this._headerBars.set_visible(true);
-        this._headerBars.playing = this._active;
+        this._headerBars.playing = this._active && Playback.isPlaying(this._daemon?.state?.nowPlaying);
 
         // Privacy indicator dots
         this._privacyDots.update(this._privacy);

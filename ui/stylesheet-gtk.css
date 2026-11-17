@@ -169,21 +169,47 @@ button.isle-button, button.isle-pill, button.isle-tab, button.isle-corner-close 
 /* ── Compact ──────────────────────────────────────────── */
 
 .isle-compact-row {
-  padding: 0 10px;
+  padding: 0 13px;
 }
 
 /* Each side's padding toward the clock is its gap to it; compact.js makes both sides as wide, and sets
  * the room at the ends from the island's height. */
-.isle-compact-start { padding-right: 30px; }
-.isle-compact-end { padding-left: 30px; }
+.isle-compact-start { padding-right: 4px; }
+.isle-compact-end { padding-left: 4px; }
 
-.isle-compact-clock { font-size: 17px; font-weight: 600; letter-spacing: -0.2px; }
-.isle-compact-clock-box { spacing: 6px; }
+.isle-compact-stat {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: -0.2px;
+  color: rgba(255, 255, 255, 0.85);
+  font-feature-settings: "tnum";
+}
+.isle-compact-stat.charging { color: #30d158; }
+.isle-compact-stat.muted { color: #ff453a; }
+
+.isle-compact-vstat {
+  padding: 0 2px;
+}
+.isle-compact-vdigit {
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 0.92;
+  margin-top: -1px;
+  margin-bottom: -1px;
+  color: rgba(255, 255, 255, 0.92);
+  font-feature-settings: "tnum";
+}
+.isle-compact-vstat.charging .isle-compact-vdigit { color: #30d158; }
+.isle-compact-vstat.muted .isle-compact-vdigit { color: #ff453a; }
+.isle-compact-vstat.boost .isle-compact-vdigit { color: #ff9f0a; }
+
+.isle-compact-clock { font-size: 19.5px; font-weight: 600; letter-spacing: -0.2px; }
+.isle-compact-clock-box { spacing: 4px; }
 /* AM or PM after the time with a 12-hour clock: 80% of its size, a little dimmer, a space's width from it. */
 .isle-compact-clock-row { spacing: 4px; }
-.isle-compact-meridiem { font-size: 13.6px; font-weight: 600; color: rgba(255, 255, 255, 0.72); }
+.isle-compact-meridiem { font-size: 15px; font-weight: 600; color: rgba(255, 255, 255, 0.72); }
 /* The day before the time (Settings): as large, quieter, a little further from it than AM or PM. */
-.isle-compact-date { font-size: 17px; font-weight: 500; letter-spacing: -0.2px; margin-right: 2px; color: rgba(255, 255, 255, 0.7); }
+.isle-compact-date { font-size: 19.5px; font-weight: 500; letter-spacing: -0.2px; margin-right: 1px; color: rgba(255, 255, 255, 0.7); }
 
 /* Inside the top bar everything is sized like the bar's own text. */
 .isle-compact-in-bar .isle-compact-start { padding-right: 28px; }

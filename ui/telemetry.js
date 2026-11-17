@@ -552,11 +552,69 @@ function _applyStandardProfile(profile, onDone) {
     });
 }
 
+let _cachedVolume = { percent: -1, muted: false };
+
+export function getCachedVolume() {
+    return _cachedVolume.percent >= 0 ? _cachedVolume : { percent: 100, muted: false };
+}
+
+export function getWifiSignal() {
+    try {
+        const [ok, data] = GLib.file_get_contents('/proc/net/wireless');
+        if (!ok) return { connected: false, quality: 0, bars: 0 };
+        const lines = new TextDecoder().decode(data).split('\n');
+        for (let i = 2; i < lines.length; i++) {
+            const line = lines[i].trim();
+            if (!line) continue;
+            const idx = line.indexOf(':');
+            if (idx === -1) continue;
+            const parts = line.slice(idx + 1).trim().split(/\s+/);
+            const rawLink = parseFloat(parts[1]);
+            if (isNaN(rawLink)) continue;
+            const quality = Math.max(0, Math.min(100, Math.round((rawLink / 70) * 100)));
+            const bars = quality >= 65 ? 3 : quality >= 35 ? 2 : quality > 0 ? 1 : 0;
+            return { connected: quality > 0, quality, bars };
+        }
+    } catch (_) {}
+    return { connected: false, quality: 0, bars: 0 };
+}
+
+function _parseWpctlVolume(stdout) {
+    if (!stdout) return null;
+    const m = stdout.match(/Volume:\s*([0-9.]+)/);
+    if (!m) return null;
+    const percent = Math.max(0, Math.round(parseFloat(m[1]) * 100));
+    const muted = /\[MUTED\]/i.test(stdout);
+    return { percent, muted };
+}
+
+function _refreshAudioVolumeAsync(onUpdated) {
+    try {
+        const proc = Gio.Subprocess.new(
+            ['wpctl', 'get-volume', '@DEFAULT_AUDIO_SINK@'],
+            Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE
+        );
+        proc.communicate_utf8_async(null, null, (_p, res) => {
+            try {
+                const [, stdout] = proc.communicate_utf8_finish(res);
+                const parsed = _parseWpctlVolume(stdout);
+                if (parsed && (parsed.percent !== _cachedVolume.percent || parsed.muted !== _cachedVolume.muted)) {
+                    _cachedVolume = parsed;
+                    if (onUpdated) onUpdated(parsed);
+                } else if (parsed && onUpdated) {
+                    _cachedVolume = parsed;
+                }
+            } catch (_) {}
+        });
+    } catch (_) {}
+}
+
 export const TelemetryMonitor = GObject.registerClass({
     GTypeName: 'IsleTelemetryMonitorService',
     Signals: {
         'updated': {},
         'power-changed': {},
+        'volume-changed': {},
     },
 }, class extends GObject.Object {
     _init() {
@@ -568,9 +626,19 @@ export const TelemetryMonitor = GObject.registerClass({
         if (this._lastAcPlugged && getPowerProfile() === 'balanced') {
             setPowerProfile('performance', () => this.emit('power-changed'));
         }
+
+        // Initial audio volume fetch and real-time pactl subscribe listener
+        this._pactlActive = false;
+        this._pactlProc = null;
+        _refreshAudioVolumeAsync(() => this.emit('volume-changed'));
+        this._startPactlSubscribe();
+
         this._timerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
             sampleNetworkThroughput();
             sampleCpuUsage();
+            if (!this._pactlActive) {
+                _refreshAudioVolumeAsync(() => this.emit('volume-changed'));
+            }
             const ac = isAcPluggedIn();
             if (ac !== this._lastAcPlugged) {
                 this._lastAcPlugged = ac;
@@ -583,10 +651,48 @@ export const TelemetryMonitor = GObject.registerClass({
         });
     }
 
+    _startPactlSubscribe() {
+        if (!GLib.find_program_in_path('pactl')) return;
+        try {
+            const proc = Gio.Subprocess.new(
+                ['pactl', 'subscribe'],
+                Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE
+            );
+            this._pactlProc = proc;
+            this._pactlActive = true;
+            const stream = new Gio.DataInputStream({ base_stream: proc.get_stdout_pipe() });
+            const readNext = () => {
+                stream.read_line_async(GLib.PRIORITY_DEFAULT, null, (_s, res) => {
+                    try {
+                        const [lineBytes] = stream.read_line_finish(res);
+                        if (lineBytes === null) {
+                            this._pactlActive = false;
+                            return;
+                        }
+                        const line = new TextDecoder().decode(lineBytes);
+                        if (line.includes('sink') || line.includes('server')) {
+                            _refreshAudioVolumeAsync(() => this.emit('volume-changed'));
+                        }
+                        readNext();
+                    } catch (_) {
+                        this._pactlActive = false;
+                    }
+                });
+            };
+            readNext();
+        } catch (_) {
+            this._pactlActive = false;
+        }
+    }
+
     destroy() {
         if (this._timerId) {
             GLib.source_remove(this._timerId);
             this._timerId = 0;
+        }
+        if (this._pactlProc) {
+            try { this._pactlProc.force_exit(); } catch (_) {}
+            this._pactlProc = null;
         }
     }
 });

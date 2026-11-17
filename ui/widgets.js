@@ -429,7 +429,14 @@ export const Bars = GObject.registerClass({
 
         this.set_draw_func((area, cr, w, h) => {
             const [r, g, b] = this._color;
-            cr.setSourceRGBA(r, g, b, 0.9);
+            if (!this._playing) {
+                const lineH = 2.0;
+                cr.setSourceRGBA(r, g, b, 0.5);
+                cr.rectangle(0, (h - lineH) / 2, w, lineH);
+                cr.fill();
+                return;
+            }
+            cr.setSourceRGBA(r, g, b, 0.95);
             for (let i = 0; i < this._count; i++) {
                 const scale = this._current[i] ?? 0.5;
                 const bh = Math.max(2.0, h * scale);
@@ -476,6 +483,153 @@ export const Bars = GObject.registerClass({
             this._current[i] = this._silhouettes[i % this._silhouettes.length];
         }
         this.queue_draw();
+    }
+});
+
+// ── Dynamic Cairo Wi-Fi Indicator ─────────────────────────────────────
+
+export const WifiIndicator = GObject.registerClass({
+    GTypeName: 'IsleGtkWifiIndicator',
+}, class WifiIndicator extends Gtk.DrawingArea {
+    _init({ width = 14, height = 12 } = {}) {
+        super._init({
+            content_width: width,
+            content_height: height,
+            halign: Gtk.Align.CENTER,
+            valign: Gtk.Align.CENTER,
+            css_classes: ['isle-wifi-indicator'],
+        });
+        this._connected = true;
+        this._bars = 3;
+
+        this.set_draw_func((_area, cr, w, h) => {
+            const scale = h / 15.0;
+            const cx = w / 2;
+            const cy = h - 2.2 * scale;
+
+            // Bottom dot
+            cr.setSourceRGBA(1, 1, 1, this._connected ? 0.92 : 0.25);
+            cr.arc(cx, cy, 1.5 * scale, 0, Math.PI * 2);
+            cr.fill();
+
+            // 3 concentric arcs opening upwards (-135 deg to -45 deg)
+            const startAngle = -0.75 * Math.PI;
+            const endAngle = -0.25 * Math.PI;
+            const radii = [4.5 * scale, 7.6 * scale, 10.7 * scale];
+            cr.setLineCap(Cairo.LineCap.ROUND);
+            cr.setLineWidth(1.6 * scale);
+
+            for (let i = 0; i < radii.length; i++) {
+                const active = this._connected && this._bars >= (i + 1);
+                cr.setSourceRGBA(1, 1, 1, active ? 0.92 : 0.22);
+                cr.newPath();
+                cr.arc(cx, cy, radii[i], startAngle, endAngle);
+                cr.stroke();
+            }
+        });
+    }
+
+    update({ connected = false, bars = 0 } = {}) {
+        const nextConn = Boolean(connected);
+        const nextBars = Math.max(0, Math.min(3, Math.round(bars)));
+        if (nextConn === this._connected && nextBars === this._bars) return;
+        this._connected = nextConn;
+        this._bars = nextBars;
+        this.queue_draw();
+    }
+});
+
+// ── Dynamic Compact Volume Badge ──────────────────────────────────────
+
+export const VolumeBadge = GObject.registerClass({
+    GTypeName: 'IsleGtkVolumeBadge',
+}, class VolumeBadge extends Gtk.Box {
+    _init() {
+        super._init({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 3,
+            valign: Gtk.Align.CENTER,
+            halign: Gtk.Align.CENTER,
+            css_classes: ['isle-compact-vol-badge'],
+        });
+        this._percent = 100;
+        this._muted = false;
+
+        this._icon = new Gtk.DrawingArea({
+            content_width: 12,
+            content_height: 11,
+            valign: Gtk.Align.CENTER,
+        });
+        this._icon.set_draw_func((_area, cr, _w, h) => {
+            const cy = h / 2;
+            const muted = this._muted || this._percent === 0;
+            const boost = !muted && this._percent > 100;
+            if (muted) cr.setSourceRGBA(1.0, 0.27, 0.23, 0.95);
+            else if (boost) cr.setSourceRGBA(1.0, 0.62, 0.04, 0.95);
+            else cr.setSourceRGBA(1, 1, 1, 0.9);
+
+            // Speaker body + cone
+            cr.newPath();
+            cr.moveTo(0.8, cy - 1.6);
+            cr.lineTo(2.8, cy - 1.6);
+            cr.lineTo(5.6, cy - 4.0);
+            cr.lineTo(5.6, cy + 4.0);
+            cr.lineTo(2.8, cy + 1.6);
+            cr.lineTo(0.8, cy + 1.6);
+            cr.closePath();
+            cr.fill();
+
+            cr.setLineCap(Cairo.LineCap.ROUND);
+            cr.setLineWidth(1.25);
+
+            if (muted) {
+                cr.moveTo(7.4, cy - 2.0);
+                cr.lineTo(10.8, cy + 2.0);
+                cr.moveTo(10.8, cy - 2.0);
+                cr.lineTo(7.4, cy + 2.0);
+                cr.stroke();
+            } else {
+                const a = Math.PI * 0.28;
+                if (this._percent > 0) {
+                    cr.newPath();
+                    cr.arc(5.8, cy, 2.3, -a, a);
+                    cr.stroke();
+                }
+                if (this._percent >= 50) {
+                    cr.newPath();
+                    cr.arc(5.8, cy, 4.4, -a, a);
+                    cr.stroke();
+                }
+            }
+        });
+        this.append(this._icon);
+
+        this._numLbl = new Gtk.Label({
+            label: '100',
+            valign: Gtk.Align.CENTER,
+            css_classes: ['isle-compact-vol-num'],
+        });
+        this.append(this._numLbl);
+    }
+
+    update({ percent = 100, muted = false } = {}) {
+        const nextPct = Math.max(0, Math.round(percent));
+        const nextMuted = Boolean(muted);
+        this._percent = nextPct;
+        this._muted = nextMuted;
+
+        this._numLbl.set_text(nextMuted ? 'M' : String(nextPct));
+        if (nextMuted) {
+            this.add_css_class('muted');
+            this.remove_css_class('boost');
+        } else if (nextPct > 100) {
+            this.remove_css_class('muted');
+            this.add_css_class('boost');
+        } else {
+            this.remove_css_class('muted');
+            this.remove_css_class('boost');
+        }
+        this._icon.queue_draw();
     }
 });
 
