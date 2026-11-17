@@ -58,6 +58,7 @@ export const UsagePage = GObject.registerClass({
             this._powerProfile = getPowerProfile();
             this._applyPowerStyle(this._powerProfile);
         });
+        this.connect('map', () => this._updateLiveTelemetry());
     }
 
     getDesiredHeight() {
@@ -363,6 +364,7 @@ export const UsagePage = GObject.registerClass({
     }
 
     _updateLiveTelemetry() {
+        if (!this.get_mapped()) return;
         const system = this._system();
         if (this._cpuDescLbl) {
             const cpuPct = sampleCpuUsage();

@@ -377,8 +377,12 @@ export const LightsPage = GObject.registerClass({
         });
 
         // Brightness slider (10-100%)
+        this._lastBrightSentMs = 0;
+        this._lastFpsSentMs = 0;
         const brightRow = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 10, hexpand: true, valign: Gtk.Align.CENTER });
-        brightRow.append(label('Brightness', 'isle-audio-label'));
+        const brightLbl = label('Brightness', 'isle-lights-label', { halign: Gtk.Align.START });
+        brightLbl.set_xalign(0);
+        brightRow.append(brightLbl);
         this._brightSlider = new Slider({ scrollStep: 0.05 });
         this._brightSlider.set_size_request(180, 16);
         this._brightSlider.value = (this._brightness - 10) / 90;
@@ -386,6 +390,11 @@ export const LightsPage = GObject.registerClass({
             if (this._syncingUi) return;
             this._brightness = Math.round(10 + val * 90);
             this._brightVal.set_text(`${this._brightness}%`);
+            const nowMs = GLib.get_monotonic_time() / 1000;
+            if (nowMs - this._lastBrightSentMs >= 60) {
+                this._lastBrightSentMs = nowMs;
+                this._send({ cmd: 'brightness', value: this._brightness });
+            }
         });
         this._brightSlider.connect('released', (_s, val) => {
             if (this._syncingUi) return;
@@ -394,13 +403,16 @@ export const LightsPage = GObject.registerClass({
             this._send({ cmd: 'brightness', value: this._brightness });
         });
         brightRow.append(this._brightSlider);
-        this._brightVal = label(`${this._brightness}%`, 'isle-audio-value');
+        this._brightVal = label(`${this._brightness}%`, 'isle-lights-value', { halign: Gtk.Align.END });
+        this._brightVal.set_xalign(1);
         brightRow.append(this._brightVal);
         slidersCard.append(brightRow);
 
         // Persistent FPS / Latency slider (5-60 FPS)
-        const fpsRow = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 10, hexpand: true, valign: Gtk.Align.CENTER });
-        fpsRow.append(label('Sync Speed', 'isle-audio-label'));
+        this._fpsRow = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 10, hexpand: true, valign: Gtk.Align.CENTER });
+        const fpsLbl = label('Sync Speed', 'isle-lights-label', { halign: Gtk.Align.START });
+        fpsLbl.set_xalign(0);
+        this._fpsRow.append(fpsLbl);
         this._fpsSlider = new Slider({ scrollStep: 0.05 });
         this._fpsSlider.set_size_request(180, 16);
         this._fpsSlider.value = (this._fps - 5) / 55;
@@ -408,6 +420,11 @@ export const LightsPage = GObject.registerClass({
             if (this._syncingUi) return;
             this._fps = Math.round(5 + val * 55);
             this._fpsVal.set_text(`${this._fps} FPS · ${Math.round(1000 / this._fps)}ms`);
+            const nowMs = GLib.get_monotonic_time() / 1000;
+            if (nowMs - this._lastFpsSentMs >= 60) {
+                this._lastFpsSentMs = nowMs;
+                this._send({ cmd: 'fps', value: this._fps });
+            }
         });
         this._fpsSlider.connect('released', (_s, val) => {
             if (this._syncingUi) return;
@@ -415,10 +432,12 @@ export const LightsPage = GObject.registerClass({
             this._fpsVal.set_text(`${this._fps} FPS · ${Math.round(1000 / this._fps)}ms`);
             this._send({ cmd: 'fps', value: this._fps });
         });
-        fpsRow.append(this._fpsSlider);
-        this._fpsVal = label(`${this._fps} FPS · ${Math.round(1000 / this._fps)}ms`, 'isle-audio-value');
-        fpsRow.append(this._fpsVal);
-        slidersCard.append(fpsRow);
+        this._fpsRow.append(this._fpsSlider);
+        this._fpsVal = label(`${this._fps} FPS · ${Math.round(1000 / this._fps)}ms`, 'isle-lights-value', { halign: Gtk.Align.END });
+        this._fpsVal.set_xalign(1);
+        this._fpsRow.append(this._fpsVal);
+        this._fpsRow.set_opacity(this._mode === 'static' ? 0.45 : 1.0);
+        slidersCard.append(this._fpsRow);
 
         root.append(slidersCard);
         this.append(root);
@@ -435,6 +454,7 @@ export const LightsPage = GObject.registerClass({
         this._staticBox.set_visible(mode === 'static');
         this._musicBox.set_visible(mode === 'music');
         this._screenBox.set_visible(mode === 'screen');
+        this._fpsRow.set_opacity(mode === 'static' ? 0.45 : 1.0);
 
         if (mode === 'static') {
             this._send({ cmd: 'static', temp: 3500 });

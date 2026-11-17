@@ -117,6 +117,7 @@ export const DevicesPage = GObject.registerClass({
         this._monitor = getTelemetryMonitor();
         this._monitorHandler = this._monitor.connect('updated', () => this._updateLiveTelemetry());
         this._volHandler = this._monitor.connect('volume-changed', () => this._refreshAudio());
+        this.connect('map', () => this._updateLiveTelemetry());
     }
 
     get available() {
@@ -596,6 +597,7 @@ export const DevicesPage = GObject.registerClass({
     }
 
     _updateLiveTelemetry() {
+        if (!this.get_mapped()) return;
         this._syncTopCards();
         this._syncConnectedDevices();
     }

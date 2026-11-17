@@ -229,6 +229,7 @@ export function init() {
     const updateVisibility = (isExpanded) => {
         if (lastExpanded === isExpanded) return;
         lastExpanded = isExpanded;
+        lightningOverlay.setExpanded(isExpanded);
 
         if (isExpanded) {
             compactView.set_visible(false);

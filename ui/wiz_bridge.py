@@ -1,20 +1,25 @@
 #!/usr/bin/env python3
 """Self-contained stdin/stdout JSON bridge for WiZ bulb discovery, Static, Music Sync, and Screen Shading."""
 
+import atexit
 import collections
 import colorsys
 import ctypes
 import json
+import os
 import random
+import select
+import signal
 import socket
 import subprocess
 import sys
 import threading
 import time
-import numpy as np
 
 WIZ_PORT = 38899
 BUFFER_SIZE = 512
+SAMPLE_RATE = 48000
+FRAME_BYTES = BUFFER_SIZE * 4  # float32 mono
 
 MUSIC_THEMES = {
     "rainbow": {"mode": "cycle"},
@@ -77,13 +82,13 @@ def udp_rpc(ip, method, params=None, timeout=0.8, broadcast=False):
 
 
 class MusicSyncEngine:
-    """Self-contained PipeWire audio-reactive WiZ sync engine."""
+    """Self-contained PipeWire audio-reactive WiZ sync engine with strict silence gating."""
 
     def __init__(self, bulb_ip, theme="rainbow", source="system", brightness=80, fps=20):
         self.bulb_ip = bulb_ip
         self.theme = theme if theme in MUSIC_THEMES else "rainbow"
         self.source = source if source in ("system", "mic") else "system"
-        self.brightness = brightness
+        self.brightness = max(10, min(100, int(brightness)))
         self.interval = 1.0 / max(1, fps)
         self.running = False
         self.thread = None
@@ -100,6 +105,9 @@ class MusicSyncEngine:
         self.fire_last = 0.0
         self.fire_rgb = (255, 100, 0)
         self.sesh_idx = 0
+        self.wave_phase = 0.0
+        self.last_rgb = (255, 160, 80)
+        self.last_sent = None
 
     def start(self):
         if self.running:
@@ -112,7 +120,7 @@ class MusicSyncEngine:
     def stop(self):
         self.running = False
         if self.thread and self.thread.is_alive():
-            self.thread.join(timeout=1.0)
+            self.thread.join(timeout=1.2)
         if self.sock:
             try:
                 self.sock.close()
@@ -123,28 +131,33 @@ class MusicSyncEngine:
     def set_theme(self, theme):
         if theme in MUSIC_THEMES:
             self.theme = theme
+            self.last_sent = None
 
     def set_brightness(self, brightness):
         self.brightness = max(10, min(100, int(brightness)))
 
     def set_interval(self, interval):
-        self.interval = max(0.008, min(0.5, float(interval)))
+        self.interval = max(0.015, min(0.5, float(interval)))
 
     def _send_rgb(self, r, g, b, dimming):
+        pkt = (int(r), int(g), int(b), max(10, min(100, int(dimming))))
+        if pkt == self.last_sent:
+            return
+        self.last_sent = pkt
         payload = json.dumps({
             "method": "setPilot",
-            "params": {"r": int(r), "g": int(g), "b": int(b), "dimming": max(10, min(100, int(dimming)))},
+            "params": {"r": pkt[0], "g": pkt[1], "b": pkt[2], "dimming": pkt[3]},
         }).encode("utf-8")
         try:
             self.sock.sendto(payload, (self.bulb_ip, WIZ_PORT))
         except Exception:
             pass
 
-    def _compute_bands(self, samples, rate=48000):
-        if samples.size == 0 or float(np.max(np.abs(samples))) < 1e-6:
+    def _compute_bands(self, np, samples):
+        if samples.size == 0 or float(np.max(np.abs(samples))) < 1e-5:
             return 0.0, 0.0, 0.0
         fft_mag = np.abs(np.fft.rfft(samples))
-        freqs = np.fft.rfftfreq(len(samples), 1.0 / rate)
+        freqs = np.fft.rfftfreq(len(samples), 1.0 / SAMPLE_RATE)
         bass = float(fft_mag[(freqs >= 20) & (freqs < 250)].mean()) if fft_mag.size else 0.0
         mid = float(fft_mag[(freqs >= 250) & (freqs < 2000)].mean()) if fft_mag.size else 0.0
         high = float(fft_mag[(freqs >= 2000) & (freqs < 8000)].mean()) if fft_mag.size else 0.0
@@ -175,7 +188,7 @@ class MusicSyncEngine:
         max_b = self.brightness
 
         if mode == "cycle":
-            self.hue = (self.hue + 0.015 + self.high_smooth * 0.05) % 1.0
+            self.hue = (self.hue + 0.012 + self.high_smooth * 0.05) % 1.0
             r, g, b = [int(c * 255) for c in colorsys.hsv_to_rgb(self.hue, 1.0, 1.0)]
             dim = min_b + self.current_volume * (max_b - min_b)
         elif mode == "bass_strobe":
@@ -187,87 +200,157 @@ class MusicSyncEngine:
                 dim = min(max_b, dim * 1.25)
         elif mode == "flicker":
             now = time.perf_counter()
-            if now - self.fire_last > 0.1:
+            if now - self.fire_last > 0.09:
                 base = random.choice(palette)
                 f = random.uniform(0.65, 1.0)
                 self.fire_rgb = tuple(int(c * f) for c in base)
                 self.fire_last = now
             r, g, b = self.fire_rgb
-            dim = min_b + (0.5 + self.bass_smooth * 0.5) * (max_b - min_b)
+            dim = min_b + (0.45 + self.bass_smooth * 0.55) * (max_b - min_b)
         elif mode == "wave":
-            t = (time.perf_counter() * 0.4 + self.mid_smooth * 0.5) % 1.0
-            i0 = int(t * len(palette)) % len(palette)
+            self.wave_phase = (self.wave_phase + 0.02 + self.mid_smooth * 0.05) % 1.0
+            i0 = int(self.wave_phase * len(palette)) % len(palette)
             i1 = (i0 + 1) % len(palette)
-            frac = (t * len(palette)) % 1.0
+            frac = (self.wave_phase * len(palette)) % 1.0
             r = int(palette[i0][0] * (1 - frac) + palette[i1][0] * frac)
             g = int(palette[i0][1] * (1 - frac) + palette[i1][1] * frac)
             b = int(palette[i0][2] * (1 - frac) + palette[i1][2] * frac)
             dim = min_b + (0.3 + self.current_volume * 0.7) * (max_b - min_b)
-        else:  # sesh flow
+        else:
             if is_beat:
                 self.sesh_idx = (self.sesh_idx + 1) % len(palette)
             r, g, b = palette[self.sesh_idx]
             dim = min_b + self.current_volume * (max_b - min_b)
 
+        self.last_rgb = (r, g, b)
         self._send_rgb(r, g, b, dim)
 
     def _resolve_device(self):
         if self.source == "mic":
             return "@DEFAULT_SOURCE@"
         try:
-            sink = subprocess.check_output(["pactl", "get-default-sink"], text=True, timeout=1.0).strip()
+            sink = subprocess.check_output(["pactl", "get-default-sink"], text=True, timeout=0.8).strip()
             if sink:
                 return f"{sink}.monitor"
         except Exception:
             pass
         return "@DEFAULT_MONITOR@"
 
-    def _run(self):
-        device = self._resolve_device()
-        cmd = [
-            "parec",
-            "--latency-msec=15",
-            "--format=float32le",
-            "--rate=48000",
-            "--channels=1",
-            "-d",
-            device,
-        ]
-        proc = None
+    def _spawn_parec(self, device):
+        return subprocess.Popen(
+            [
+                "parec",
+                "--latency-msec=12",
+                f"--format=float32le",
+                f"--rate={SAMPLE_RATE}",
+                "--channels=1",
+                "-d",
+                device,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+
+    def _terminate_proc(self, proc):
+        if proc is None:
+            return
         try:
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            proc.terminate()
+            proc.wait(timeout=0.4)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+    def _run(self):
+        import numpy as np  # Lazy import to save RAM when idle/static
+
+        device = self._resolve_device()
+        proc = None
+        last_device_check = time.perf_counter()
+        last_send = 0.0
+        silent_frames = 0
+        held_silence = False
+        buf = bytearray()
+
+        try:
+            proc = self._spawn_parec(device)
             while self.running and proc.poll() is None:
-                t0 = time.perf_counter()
-                n_samples = max(BUFFER_SIZE, int(48000 * self.interval))
-                raw = proc.stdout.read(n_samples * 4)
-                if not raw or len(raw) < 4:
-                    time.sleep(0.01)
+                # Poll stdout with short timeout so stop() responds immediately
+                rlist, _, _ = select.select([proc.stdout.fileno()], [], [], 0.1)
+                if not rlist:
+                    now = time.perf_counter()
+                    if now - last_device_check >= 2.0 and self.source == "system":
+                        last_device_check = now
+                        new_dev = self._resolve_device()
+                        if new_dev != device:
+                            self._terminate_proc(proc)
+                            device = new_dev
+                            buf.clear()
+                            proc = self._spawn_parec(device)
                     continue
-                samples = np.frombuffer(raw, dtype=np.float32)[-BUFFER_SIZE:]
-                rms = float(np.sqrt(np.mean(samples ** 2)))
-                bass, mid, high = self._compute_bands(samples)
-                self.bass_smooth += 0.5 * (bass - self.bass_smooth)
-                self.mid_smooth += 0.35 * (mid - self.mid_smooth)
-                self.high_smooth += 0.45 * (high - self.high_smooth)
-                is_beat = self._detect_beat(bass, rms)
-                target_vol = min(1.0, rms * 9.0)
-                self.current_volume += 0.5 * (target_vol - self.current_volume)
-                self._render_frame(is_beat)
-                elapsed = time.perf_counter() - t0
-                if elapsed < self.interval:
-                    time.sleep(min(0.005, self.interval - elapsed))
+
+                chunk = os.read(proc.stdout.fileno(), 65536)
+                if not chunk:
+                    break
+                buf.extend(chunk)
+
+                # Keep only the most recent frames to prevent pipe queue backlog
+                if len(buf) > FRAME_BYTES * 3:
+                    del buf[: len(buf) - FRAME_BYTES]
+
+                while len(buf) >= FRAME_BYTES and self.running:
+                    raw = bytes(buf[:FRAME_BYTES])
+                    del buf[:FRAME_BYTES]
+
+                    samples = np.frombuffer(raw, dtype=np.float32)
+                    rms = float(np.sqrt(np.mean(samples ** 2)))
+                    now = time.perf_counter()
+
+                    if rms < 0.006:
+                        silent_frames += 1
+                        self.current_volume *= 0.82
+                        self.bass_smooth *= 0.8
+                        self.mid_smooth *= 0.8
+                        self.high_smooth *= 0.8
+                        if silent_frames > 15:
+                            if not held_silence:
+                                held_silence = True
+                                min_b = max(10, int(self.brightness * 0.25))
+                                self._send_rgb(self.last_rgb[0], self.last_rgb[1], self.last_rgb[2], min_b)
+                            continue
+                    else:
+                        silent_frames = 0
+                        held_silence = False
+
+                    bass, mid, high = self._compute_bands(np, samples)
+                    self.bass_smooth += 0.5 * (bass - self.bass_smooth)
+                    self.mid_smooth += 0.35 * (mid - self.mid_smooth)
+                    self.high_smooth += 0.45 * (high - self.high_smooth)
+                    is_beat = self._detect_beat(bass, rms)
+                    target_vol = min(1.0, rms * 9.0)
+                    self.current_volume += 0.5 * (target_vol - self.current_volume)
+
+                    due = (now - last_send) >= self.interval
+                    beat_due = is_beat and (now - last_send) >= max(0.016, self.interval * 0.5)
+                    if due or beat_due:
+                        self._render_frame(is_beat)
+                        last_send = now
+
+                now = time.perf_counter()
+                if now - last_device_check >= 2.0 and self.source == "system":
+                    last_device_check = now
+                    new_dev = self._resolve_device()
+                    if new_dev != device:
+                        self._terminate_proc(proc)
+                        device = new_dev
+                        buf.clear()
+                        proc = self._spawn_parec(device)
         except Exception as exc:
             emit({"type": "error", "message": f"Music sync error: {exc}"})
         finally:
-            if proc is not None:
-                try:
-                    proc.terminate()
-                    proc.wait(timeout=0.5)
-                except Exception:
-                    try:
-                        proc.kill()
-                    except Exception:
-                        pass
+            self._terminate_proc(proc)
 
 
 class ScreenSyncEngine:
@@ -276,12 +359,13 @@ class ScreenSyncEngine:
     def __init__(self, bulb_ip, region="full_screen", brightness=80, fps=20):
         self.bulb_ip = bulb_ip
         self.region = region
-        self.brightness = brightness
+        self.brightness = max(10, min(100, int(brightness)))
         self.interval = 1.0 / max(1, fps)
         self.running = False
         self.thread = None
         self.sock = None
         self.smooth_rgb = None
+        self.last_sent = None
 
     def start(self):
         if self.running:
@@ -310,7 +394,7 @@ class ScreenSyncEngine:
         self.brightness = max(10, min(100, int(brightness)))
 
     def set_interval(self, interval):
-        self.interval = max(0.01, min(0.5, float(interval)))
+        self.interval = max(0.015, min(0.5, float(interval)))
 
     def _region_rect(self, sw, sh):
         if self.region == "top_center":
@@ -322,6 +406,8 @@ class ScreenSyncEngine:
         return 0, 0, sw, sh
 
     def _run(self):
+        import numpy as np  # Lazy import to save RAM when idle/static
+
         x11 = ctypes.CDLL("libX11.so.6")
         x11.XOpenDisplay.restype = ctypes.c_void_p
         x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
@@ -369,19 +455,17 @@ class ScreenSyncEngine:
                             int(self.smooth_rgb[1] + a * (ng - self.smooth_rgb[1])),
                             int(self.smooth_rgb[2] + a * (nb - self.smooth_rgb[2])),
                         )
-                    payload = json.dumps({
-                        "method": "setPilot",
-                        "params": {
-                            "r": self.smooth_rgb[0],
-                            "g": self.smooth_rgb[1],
-                            "b": self.smooth_rgb[2],
-                            "dimming": self.brightness,
-                        },
-                    }).encode("utf-8")
-                    try:
-                        self.sock.sendto(payload, (self.bulb_ip, WIZ_PORT))
-                    except Exception:
-                        pass
+                    pkt = (self.smooth_rgb[0], self.smooth_rgb[1], self.smooth_rgb[2], self.brightness)
+                    if pkt != self.last_sent:
+                        self.last_sent = pkt
+                        payload = json.dumps({
+                            "method": "setPilot",
+                            "params": {"r": pkt[0], "g": pkt[1], "b": pkt[2], "dimming": pkt[3]},
+                        }).encode("utf-8")
+                        try:
+                            self.sock.sendto(payload, (self.bulb_ip, WIZ_PORT))
+                        except Exception:
+                            pass
 
                 elapsed = time.perf_counter() - t0
                 time.sleep(max(0.005, self.interval - elapsed))
@@ -510,8 +594,21 @@ class BridgeState:
                 self.stop_engines()
 
 
+def _install_parent_death_signal():
+    """Ensure kernel kills wiz_bridge cleanly if isle-ui exits or crashes."""
+    try:
+        libc = ctypes.CDLL("libc.so.6")
+        libc.prctl(1, signal.SIGTERM)  # PR_SET_PDEATHSIG = 1
+    except Exception:
+        pass
+
+
 def main():
+    _install_parent_death_signal()
     bridge = BridgeState()
+    atexit.register(bridge.stop_engines)
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+
     bridge.scan()
     for line in sys.stdin:
         line = line.strip()

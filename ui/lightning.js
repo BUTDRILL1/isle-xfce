@@ -35,6 +35,7 @@ export const LightningOverlay = GObject.registerClass({
         });
 
         this._active = false;
+        this._expanded = false;
         this._timerId = 0;
         this._phase = 0;
         this._bolts = Array.from({ length: BOLT_COUNT }, (_, i) => this._newBolt(i / BOLT_COUNT));
@@ -60,8 +61,15 @@ export const LightningOverlay = GObject.registerClass({
         };
     }
 
+    setExpanded(expanded) {
+        const next = Boolean(expanded);
+        if (this._expanded === next) return;
+        this._expanded = next;
+        this.refresh();
+    }
+
     refresh() {
-        const shouldRun = isAcPluggedIn() && getPowerProfile() === 'lightning';
+        const shouldRun = this._expanded && isAcPluggedIn() && getPowerProfile() === 'lightning';
         if (shouldRun === this._active) return;
         this._active = shouldRun;
 

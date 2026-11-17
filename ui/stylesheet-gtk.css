@@ -583,6 +583,19 @@ button.isle-wiz-swatch-btn {
   background-color: rgba(255, 255, 255, 0.06);
 }
 button.isle-wiz-swatch-btn:hover { background-color: rgba(255, 255, 255, 0.18); }
+.isle-lights-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.85);
+  min-width: 82px;
+}
+.isle-lights-value {
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.72);
+  min-width: 96px;
+  font-feature-settings: "tnum";
+}
 
 /* Volume and outputs */
 
