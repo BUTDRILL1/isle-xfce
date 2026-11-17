@@ -31,7 +31,17 @@ pub fn is_remote(art_url: &str) -> bool {
 pub fn download(art_url: &str) -> anyhow::Result<String> {
     let path = cached_path(art_url);
     if !path.exists() {
-        let bytes = crate::http::get(art_url, DOWNLOAD_TIMEOUT)
+        let mut resolved_url = art_url.to_owned();
+        if art_url.starts_with("https://open.spotify.com/oembed?url=")
+            && let Ok(meta) = crate::http::get(art_url, DOWNLOAD_TIMEOUT)
+                .call()?
+                .body_mut()
+                .read_json::<serde_json::Value>()
+            && let Some(thumb) = meta.get("thumbnail_url").and_then(|v| v.as_str())
+        {
+            resolved_url = thumb.to_owned();
+        }
+        let bytes = crate::http::get(&resolved_url, DOWNLOAD_TIMEOUT)
             .call()?
             .body_mut()
             .with_config()

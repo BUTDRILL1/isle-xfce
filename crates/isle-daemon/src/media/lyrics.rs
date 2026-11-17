@@ -204,6 +204,7 @@ fn cached(path: &Path) -> Option<Lyrics> {
 /// Asks LRCLIB in three steps, from the most exact to the loosest.
 fn lookup(query: &TrackQuery, title: String, artist: String) -> Result<Option<Record>, Failure> {
     let duration = format!("{:.0}", query.length_s);
+    let mut fallback = None;
 
     // An exact match on title, artist, album and duration is the most precise.
     // LRCLIB takes a length of 1 s to an hour; under a second rounds to 0, which it refuses.
@@ -218,11 +219,14 @@ fn lookup(query: &TrackQuery, title: String, artist: String) -> Result<Option<Re
             ],
         )?;
         if let Some(record) = exact.filter(has_lyrics) {
-            return Ok(Some(record));
+            if is_preferred_script(&record) {
+                return Ok(Some(record));
+            }
+            fallback = Some(record);
         }
     }
 
-    // Otherwise search, preferring synced lyrics of about the right length.
+    // Otherwise search, preferring synced lyrics of about the right length and preferred script.
     // Without an artist any song of that name matches, so the length must fit.
     let mut params = vec![("track_name", title.as_str())];
     if !artist.is_empty() {
@@ -230,17 +234,19 @@ fn lookup(query: &TrackQuery, title: String, artist: String) -> Result<Option<Re
     }
     let results = get_json::<Vec<Record>>("search", &params)?.unwrap_or_default();
     if let Some(record) = best_match(results, query.length_s, &artist, artist.is_empty()) {
-        return Ok(Some(record));
+        if fallback.as_ref().is_none_or(|fb| is_preferred_script(&record) || fb.synced_lyrics.is_none()) {
+            return Ok(Some(record));
+        }
     }
 
     // Last, for YouTube-style titles, search the whole title as free text (catches a wrongly
     // split "Artist - Song"). Any song can turn up here, so the length must fit.
     let text = full_title(&query.title);
     if text == title && !text.contains(" - ") {
-        return Ok(None);
+        return Ok(fallback);
     }
     let results = get_json::<Vec<Record>>("search", &[("q", &text)])?.unwrap_or_default();
-    Ok(best_match(results, query.length_s, &artist, true))
+    Ok(best_match(results, query.length_s, &artist, true).or(fallback))
 }
 
 /// GETs `{API}/{endpoint}` and reads the JSON answer; `None` on HTTP 404.
@@ -307,7 +313,32 @@ fn has_lyrics(record: &Record) -> bool {
         || record.instrumental()
 }
 
-/// Picks the best result: right artist and length first, then synced over plain lyrics.
+/// Prefers Romanized (Latin) or Hindi (Devanagari) lyrics when multiple uploads exist.
+fn is_preferred_script(record: &Record) -> bool {
+    let text = record
+        .synced_lyrics
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| record.plain_lyrics.as_deref())
+        .unwrap_or_default();
+    let mut total = 0usize;
+    let mut preferred = 0usize;
+    for ch in text.chars() {
+        if !ch.is_alphabetic() {
+            continue;
+        }
+        total += 1;
+        if ch.is_ascii_alphabetic()
+            || ('\u{00C0}'..='\u{024F}').contains(&ch)
+            || ('\u{0900}'..='\u{097F}').contains(&ch)
+        {
+            preferred += 1;
+        }
+    }
+    total == 0 || preferred * 2 >= total
+}
+
+/// Picks the best result: right artist and length first, then synced, then preferred script.
 /// With `strict`, a result whose known length does not fit is never picked.
 fn best_match(results: Vec<Record>, length_s: f64, artist: &str, strict: bool) -> Option<Record> {
     let fits = |record: &Record| {
@@ -329,6 +360,7 @@ fn best_match(results: Vec<Record>, length_s: f64, artist: &str, strict: bool) -
             same_artist(record),
             fits(record),
             record.synced_lyrics.is_some(),
+            is_preferred_script(record),
             record.plain_lyrics.is_some(),
         )
     };

@@ -341,7 +341,7 @@ export const MediaPage = GObject.registerClass({
 
         this._lyricsColumn = new Gtk.Box({
             orientation: Gtk.Orientation.VERTICAL,
-            spacing: 8,
+            spacing: 2,
             hexpand: true,
             valign: Gtk.Align.START,
             css_classes: ['isle-lyrics-column'],
@@ -613,7 +613,7 @@ export const MediaPage = GObject.registerClass({
             for (let i = 0; i < lyrics.lines.length; i++) {
                 const line = lyrics.lines[i];
                 const btn = new Gtk.Button({
-                    css_classes: ['isle-lyric-button', 'isle-button-flat'],
+                    css_classes: ['isle-button', 'isle-button-flat', 'isle-lyric-button'],
                     hexpand: true,
                 });
                 const lbl = label(line.text || '♪', 'isle-lyric-line');
@@ -662,7 +662,7 @@ export const MediaPage = GObject.registerClass({
                 if (adj && activeWidget.get_parent()) {
                     const alloc = activeWidget.get_allocation();
                     if (alloc.y > 0) {
-                        adj.set_value(Math.max(0, alloc.y - 40));
+                        adj.set_value(Math.max(0, alloc.y - 46));
                     }
                 }
             }

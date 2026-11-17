@@ -1056,7 +1056,18 @@ fn snapshot(all: &HashMap<String, OwnedValue>) -> Snapshot {
             .unwrap_or_default()
             .join(", "),
         album: meta("xesam:album").and_then(string).unwrap_or_default(),
-        art_url: meta("mpris:artUrl").and_then(string).unwrap_or_default(),
+        art_url: {
+            let raw_art = meta("mpris:artUrl").and_then(string).unwrap_or_default();
+            if raw_art.contains("ab6742d3")
+                && let Some(track_url) = meta("xesam:url")
+                    .and_then(string)
+                    .filter(|u| u.starts_with("https://open.spotify.com/"))
+            {
+                format!("https://open.spotify.com/oembed?url={track_url}")
+            } else {
+                raw_art
+            }
+        },
         track_id: meta("mpris:trackid").and_then(|value| match value {
             Value::ObjectPath(path) => Some(path.clone().into()),
             // Some players send the id as a plain string.

@@ -1075,7 +1075,17 @@ export const Art = GObject.registerClass({
         }
 
         try {
-            this._pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(path, this._size, this._size, true);
+            const raw = GdkPixbuf.Pixbuf.new_from_file(path);
+            const rw = raw.get_width();
+            const rh = raw.get_height();
+            const side = Math.min(rw, rh);
+            let square = raw;
+            if (rw !== rh && side > 0) {
+                const ox = Math.floor((rw - side) / 2);
+                const oy = Math.floor((rh - side) / 2);
+                square = raw.new_subpixbuf(ox, oy, side, side);
+            }
+            this._pixbuf = square.scale_simple(this._size, this._size, GdkPixbuf.InterpType.BILINEAR);
             this._showsIcon = false;
         } catch (e) {
             this._pixbuf = null;
