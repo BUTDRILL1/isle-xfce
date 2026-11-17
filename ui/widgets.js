@@ -41,6 +41,7 @@ const OWN_ICONS = {
     'touchpad-disabled': 'isle-touchpad-off-symbolic',
     'input-touchpad': 'isle-touchpad-symbolic',
     'airplane-mode': 'isle-airplane-symbolic',
+    'bulb': 'isle-bulb-symbolic',
     'camera-disabled': 'isle-video-off-symbolic',
     'camera-hardware-disabled': 'isle-video-off-symbolic',
     'camera': 'isle-video-symbolic',

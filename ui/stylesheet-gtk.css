@@ -538,8 +538,8 @@ button.isle-button, button.isle-pill, button.isle-tab, button.isle-corner-close 
 .isle-time-end { }
 
 .isle-slider { min-height: 16px; }
-.isle-slider-track { border-radius: 2px; background-color: rgba(255, 255, 255, 0.2); }
-.isle-slider-fill { border-radius: 2px; background-color: #ffffff; }
+.isle-slider-track { min-height: 4px; border-radius: 2px; background-color: rgba(255, 255, 255, 0.2); }
+.isle-slider-fill { min-height: 4px; border-radius: 2px; background-color: #ffffff; }
 .isle-slider-knob { border-radius: 6px; background-color: #ffffff; }
 
 .isle-transport { }
@@ -575,6 +575,14 @@ button.isle-button, button.isle-pill, button.isle-tab, button.isle-corner-close 
   background-color: rgba(10, 132, 255, 0.28);
   color: #ffffff;
 }
+button.isle-wiz-swatch-btn {
+  padding: 3px;
+  min-width: 24px;
+  min-height: 24px;
+  border-radius: 12px;
+  background-color: rgba(255, 255, 255, 0.06);
+}
+button.isle-wiz-swatch-btn:hover { background-color: rgba(255, 255, 255, 0.18); }
 
 /* Volume and outputs */
 

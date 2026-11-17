@@ -18,6 +18,7 @@ import { NotificationCenter } from './notifications.js';
 import { AppsPage } from './pages/apps.js';
 import { CalendarPage } from './pages/calendar.js';
 import { DevicesPage } from './pages/devices.js';
+import { LightsPage } from './pages/lights.js';
 import { MediaPage } from './pages/media.js';
 import { NotificationsPage } from './pages/notifications.js';
 import { ShelfPage } from './pages/shelf.js';
@@ -93,6 +94,7 @@ export function init() {
     const calendarPage = new CalendarPage(daemon);
     const appsPage = new AppsPage(daemon);
     const devicesPage = new DevicesPage(daemon, { notificationCenter });
+    const lightsPage = new LightsPage(daemon);
     const usagePage = new UsagePage(daemon);
 
     const callPage = new Page(daemon, {
@@ -118,6 +120,7 @@ export function init() {
         calendarPage,      // calendar
         appsPage,          // apps
         devicesPage,       // devices
+        lightsPage,        // lights
         usagePage,         // usage
     ];
 

@@ -49,6 +49,7 @@ export const TABS = {
     calendar: { icon: 'isle-calendar', label: 'Calendar' },
     apps: { icon: 'isle-apps', label: 'Apps' },
     devices: { icon: 'isle-headphones', label: 'Status' },
+    lights: { icon: 'isle-bulb', label: 'Lights' },
     usage: { icon: 'isle-gauge', label: 'Usage' },
 };
 
