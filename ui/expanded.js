@@ -826,13 +826,15 @@ export const ExpandedView = GObject.registerClass({
             targetH = 240;
         }
 
+        const targetCls = `isle-h-${targetH}`;
         const classes = win.get_css_classes();
-        for (const cls of classes) {
-            if (cls.startsWith('isle-h-')) {
-                win.remove_css_class(cls);
-            }
+        const existingH = classes.filter(c => c.startsWith('isle-h-'));
+        if (existingH.length === 1 && existingH[0] === targetCls) {
+            return;
         }
-        win.add_css_class(`isle-h-${targetH}`);
+        const nextClasses = classes.filter(c => !c.startsWith('isle-h-'));
+        nextClasses.push(targetCls);
+        win.set_css_classes(nextClasses);
     }
 
     setActive(active) {

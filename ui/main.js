@@ -226,27 +226,42 @@ export function init() {
     overlay.add_overlay(expandedView);
 
     let lastExpanded = null;
-    const updateVisibility = (isExpanded) => {
-        if (lastExpanded === isExpanded) return;
-        lastExpanded = isExpanded;
-        lightningOverlay.setExpanded(isExpanded);
+    let lastHeight = -1;
+    const syncMorphProgress = (height) => {
+        if (height === lastHeight) return;
+        lastHeight = height;
 
-        if (isExpanded) {
+        // Smoothly fade out compactView from height 38..85, then fade in expandedView from 85..220
+        if (height <= 85) {
+            const compactAlpha = Math.max(0, Math.min(1, 1 - (height - 38) / 47));
+            expandedView.set_visible(false);
+            expandedView.set_opacity(0.0);
+            compactView.set_visible(true);
+            compactView.set_opacity(compactAlpha);
+            if (lastExpanded !== false) {
+                lastExpanded = false;
+                lightningOverlay.setExpanded(false);
+                expandedView.setActive(false);
+            }
+        } else {
+            const expAlpha = Math.max(0, Math.min(1, (height - 85) / 135));
             compactView.set_visible(false);
             compactView.set_opacity(0.0);
             expandedView.set_visible(true);
-            expandedView.set_opacity(1.0);
-            expandedView.setActive(true);
-        } else {
-            expandedView.set_visible(false);
-            expandedView.set_opacity(0.0);
-            expandedView.setActive(false);
-            compactView.set_visible(true);
-            compactView.set_opacity(1.0);
+            expandedView.set_opacity(expAlpha);
+            if (lastExpanded !== true) {
+                lastExpanded = true;
+                lightningOverlay.setExpanded(true);
+                expandedView.setActive(true);
+            }
         }
     };
 
-    updateVisibility(false);
+    const updateVisibility = (isExpanded) => {
+        syncMorphProgress(isExpanded ? 300 : 38);
+    };
+
+    syncMorphProgress(38);
 
     // IPC trigger for automated verification
     GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, () => {
@@ -383,8 +398,7 @@ export function init() {
 
     // Synchronize visibility with live window geometry and spring animations on each GTK tick
     win.add_tick_callback(() => {
-        const height = win.get_height();
-        updateVisibility(height > 150);
+        syncMorphProgress(win.get_height());
         return GLib.SOURCE_CONTINUE;
     });
 

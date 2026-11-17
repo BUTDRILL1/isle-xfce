@@ -663,8 +663,8 @@ impl FloatingWindow {
         let scale = self.0.window.scale_factor();
 
         self.0.window.set_size_request(outer_w as i32, height as i32);
+        self.0.window.set_default_size(outer_w as i32, height as i32);
 
-        sync_gdk(&self.0.window);
         let _ = self.0.x11.configure_geometry(
             xid,
             x * scale,
@@ -672,7 +672,6 @@ impl FloatingWindow {
             outer_w * scale as u32,
             height * scale as u32,
         );
-        let _ = self.0.x11.restack_above(xid);
     }
 
     pub fn present(&self) {

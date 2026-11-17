@@ -58,8 +58,9 @@ impl X11Context {
             .x(x)
             .y(y)
             .width(width)
-            .height(height);
-        self.conn.configure_window(xid, &geom)?.check()?;
+            .height(height)
+            .stack_mode(StackMode::ABOVE);
+        self.conn.configure_window(xid, &geom)?;
         self.conn.flush()?;
         Ok(())
     }
