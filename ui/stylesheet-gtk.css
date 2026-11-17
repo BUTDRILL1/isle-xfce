@@ -879,6 +879,63 @@ button.isle-lyric-button:hover {
 }
 .isle-cal-dot.on-today { background-color: #ffffff; }
 
+/* GTK4 button resets and Month/Week view additions */
+button.isle-cal-day {
+  padding: 0;
+  min-width: 24px;
+  min-height: 24px;
+  border-radius: 12px;
+  background-color: transparent;
+  border: none;
+  box-shadow: none;
+}
+button.isle-cal-day:hover { background-color: rgba(255, 255, 255, 0.12); }
+button.isle-cal-day.selected { background-color: rgba(255, 255, 255, 0.22); }
+button.isle-cal-day.today { background-color: #ff453a; color: #ffffff; font-weight: 700; }
+button.isle-cal-day.today:hover { background-color: #ff5f55; }
+button.isle-cal-day.outside { color: rgba(255, 255, 255, 0.25); font-weight: 500; }
+
+button.isle-cal-arrow {
+  padding: 2px 6px;
+  min-width: 22px;
+  min-height: 22px;
+  border-radius: 11px;
+  background-color: transparent;
+  color: rgba(255, 255, 255, 0.75);
+}
+button.isle-cal-arrow:hover { background-color: rgba(255, 255, 255, 0.12); color: #ffffff; }
+
+.isle-cal-mode-group {
+  background-color: rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  padding: 2px;
+}
+button.isle-cal-mode-btn {
+  min-height: 20px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.65);
+  background-color: transparent;
+}
+button.isle-cal-mode-btn.active {
+  background-color: rgba(255, 255, 255, 0.2);
+  color: #ffffff;
+}
+
+button.isle-cal-week-col {
+  padding: 6px 4px;
+  border-radius: 10px;
+  background-color: rgba(255, 255, 255, 0.05);
+}
+button.isle-cal-week-col:hover { background-color: rgba(255, 255, 255, 0.11); }
+button.isle-cal-week-col.selected { background-color: rgba(255, 255, 255, 0.18); }
+button.isle-cal-week-col.today { border: 1px solid #ff453a; }
+.isle-cal-week-dow { font-size: 10px; font-weight: 600; color: rgba(255, 255, 255, 0.55); }
+.isle-cal-week-num { font-size: 13px; font-weight: 700; color: #ffffff; }
+button.isle-cal-week-col.today .isle-cal-week-num { color: #ff453a; }
+
 /* The day's events. */
 .isle-cal-agenda { }
 .isle-cal-day-header { }
