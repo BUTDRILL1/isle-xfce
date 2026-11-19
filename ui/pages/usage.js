@@ -337,9 +337,15 @@ export const UsagePage = GObject.registerClass({
     _selectPowerProfile(next) {
         this._powerProfile = next;
         this._applyPowerStyle(next);
+        globalThis.islePowerProfile = next;
+        if (globalThis.isleSaveSettings) globalThis.isleSaveSettings();
         setPowerProfile(next, actual => {
             this._powerProfile = actual;
             this._applyPowerStyle(actual);
+            if (actual && actual !== globalThis.islePowerProfile) {
+                globalThis.islePowerProfile = actual;
+                if (globalThis.isleSaveSettings) globalThis.isleSaveSettings();
+            }
         });
     }
 

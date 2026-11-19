@@ -197,6 +197,7 @@ button.isle-button, button.isle-pill, button.isle-tab, button.isle-corner-close 
 .isle-compact-vstat.charging .isle-compact-vdigit { color: #30d158; }
 .isle-compact-vstat.muted .isle-compact-vdigit { color: #ff453a; }
 .isle-compact-vstat.boost .isle-compact-vdigit { color: #ff9f0a; }
+.isle-compact-vstat.capped .isle-compact-vdigit { color: #0a84ff; }
 
 .isle-compact-clock { font-size: 19.5px; font-weight: 600; letter-spacing: -0.2px; }
 .isle-compact-clock-box { }
@@ -1450,6 +1451,27 @@ button.isle-airplane-btn.active {
   color: #ff9f0a;
 }
 .isle-device-tile { min-width: 32px; min-height: 32px; border-radius: 8px; background-color: rgba(255, 255, 255, 0.14); }
+button.isle-battery-cap-btn {
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background-color: rgba(255, 255, 255, 0.14);
+  color: #ffffff;
+  transition-duration: 150ms;
+}
+button.isle-battery-cap-btn:hover {
+  background-color: rgba(255, 255, 255, 0.24);
+}
+button.isle-battery-cap-btn.cap-active {
+  background-color: rgba(10, 132, 255, 0.28);
+  border-color: rgba(10, 132, 255, 0.55);
+  color: #0a84ff;
+}
+button.isle-battery-cap-btn.cap-active:hover {
+  background-color: rgba(10, 132, 255, 0.38);
+}
 .isle-device-icon { color: #ffffff; }
 .isle-device-texts { }
 .isle-device-name { font-size: 14px; font-weight: 600; color: #ffffff; }
@@ -1580,6 +1602,14 @@ button.isle-airplane-btn.active {
 #isleIsland.isle-translucent .isle-apps-time { color: rgba(255, 255, 255, 0.73); }
 #isleIsland.isle-translucent .isle-device-card { background-color: rgba(255, 255, 255, 0.08); }
 #isleIsland.isle-translucent .isle-device-tile { background-color: rgba(255, 255, 255, 0.14); }
+#isleIsland.isle-translucent button.isle-battery-cap-btn.cap-active {
+  background-color: rgba(10, 132, 255, 0.28);
+  border-color: rgba(10, 132, 255, 0.55);
+  color: #0a84ff;
+}
+#isleIsland.isle-translucent button.isle-battery-cap-btn.cap-active:hover {
+  background-color: rgba(10, 132, 255, 0.38);
+}
 #isleIsland.isle-translucent .isle-device-connected,
 #isleIsland.isle-translucent .isle-device-none { color: rgba(255, 255, 255, 0.7); }
 #isleIsland.isle-translucent .isle-device-battery-body { border-color: rgba(255, 255, 255, 0.6); }
@@ -1592,6 +1622,14 @@ button.isle-airplane-btn.active {
 #isleIsland.isle-translucent .isle-device-card.low .isle-device-connected { color: #ff968d; }
 #isleIsland.isle-glass-dark .isle-device-card { background-color: rgba(255, 255, 255, 0.1); }
 #isleIsland.isle-glass-dark .isle-device-tile { background-color: rgba(255, 255, 255, 0.1); }
+#isleIsland.isle-glass-dark button.isle-battery-cap-btn.cap-active {
+  background-color: rgba(10, 132, 255, 0.28);
+  border-color: rgba(10, 132, 255, 0.55);
+  color: #0a84ff;
+}
+#isleIsland.isle-glass-dark button.isle-battery-cap-btn.cap-active:hover {
+  background-color: rgba(10, 132, 255, 0.38);
+}
 #isleIsland.isle-translucent .isle-segment:focus { color: #ffffff; }
 
 /* Icon buttons: no fill until the pointer is on them (first: the buttons below have their own). */

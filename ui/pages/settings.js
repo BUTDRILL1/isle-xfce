@@ -72,16 +72,19 @@ export const SettingsPage = GObject.registerClass({
         // 2. Glass Opacity: Presets (10%, 15%, 25%, 50%) + Slider
         rootBox.append(this._buildGlassOpacitySection());
 
-        // 3. Clock Format: 12-hour vs 24-hour
+        // 3. Battery Charge Limit: Presets (40%, 60%, 70%, 80%) + Slider (40-95%)
+        rootBox.append(this._buildChargeLimitSection());
+
+        // 4. Clock Format: 12-hour vs 24-hour
         rootBox.append(this._buildClockFormatSection());
 
-        // 4. Tab Switching Interaction: Hover vs Click + Hold Time Slider
+        // 5. Tab Switching Interaction: Hover vs Click + Hold Time Slider
         rootBox.append(this._buildTabSwitchingSection());
 
-        // 5. Sound Toggle for Timer/Alarm
+        // 6. Sound Toggle for Timer/Alarm
         rootBox.append(this._buildSoundSection());
 
-        // 6. System Settings launcher (xfce4-settings-manager)
+        // 7. System Settings launcher (xfce4-settings-manager)
         rootBox.append(this._buildSystemSettingsSection());
 
         scrolled.set_child(rootBox);
@@ -171,6 +174,141 @@ export const SettingsPage = GObject.registerClass({
             updateButtons(val);
         });
         card.append(scale);
+
+        return card;
+    }
+
+    _buildChargeLimitSection() {
+        const card = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 6,
+            css_classes: ['isle-settings-card'],
+        });
+
+        const topRow = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 8,
+            valign: Gtk.Align.CENTER,
+            hexpand: true,
+        });
+
+        const labelBox = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 1,
+            hexpand: true,
+        });
+        const title = label('Battery Charge Limit', 'isle-title');
+        const subtitle = label('Hold level on AC · click battery icon in Status to toggle', 'isle-subtitle');
+        labelBox.append(title);
+        labelBox.append(subtitle);
+        topRow.append(labelBox);
+
+        const presetsBox = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 5,
+            valign: Gtk.Align.CENTER,
+        });
+
+        const presets = [40, 60, 70, 80];
+        const buttons = [];
+        const initialCap = globalThis.isleGetChargeLimit
+            ? globalThis.isleGetChargeLimit()
+            : { enabled: true, percent: 70 };
+
+        let syncing = false;
+        let saveTimerId = 0;
+
+        const scale = new Gtk.Scale({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            adjustment: new Gtk.Adjustment({
+                lower: 40,
+                upper: 95,
+                step_increment: 1,
+                page_increment: 5,
+                value: initialCap.percent,
+            }),
+            digits: 0,
+            hexpand: true,
+            draw_value: true,
+            value_pos: Gtk.PositionType.RIGHT,
+            css_classes: ['isle-settings-scale'],
+        });
+        scale.set_format_value_func((_s, v) => `${Math.round(v)}%`);
+
+        const updateButtons = (val) => {
+            const rounded = Math.round(val);
+            buttons.forEach(({ btn, preset }) => {
+                if (rounded === preset) {
+                    btn.add_css_class('isle-pill-accent');
+                    btn.remove_css_class('isle-pill-small');
+                } else {
+                    btn.remove_css_class('isle-pill-accent');
+                    btn.add_css_class('isle-pill-small');
+                }
+            });
+        };
+
+        presets.forEach(p => {
+            const btn = pillButton(`${p}%`, (p === initialCap.percent ? 'isle-pill-accent' : 'isle-pill-small'), () => {
+                if (saveTimerId) {
+                    GLib.source_remove(saveTimerId);
+                    saveTimerId = 0;
+                }
+                syncing = true;
+                scale.set_value(p);
+                syncing = false;
+                updateButtons(p);
+                if (globalThis.isleSetChargeLimit) {
+                    globalThis.isleSetChargeLimit({ percent: p }, { save: true });
+                }
+            });
+            btn.set_size_request(44, 26);
+            buttons.push({ btn, preset: p });
+            presetsBox.append(btn);
+        });
+
+        topRow.append(presetsBox);
+        card.append(topRow);
+
+        scale.connect('value-changed', () => {
+            if (syncing) return;
+            const val = Math.round(scale.get_value());
+            updateButtons(val);
+            if (globalThis.isleSetChargeLimit) {
+                globalThis.isleSetChargeLimit({ percent: val }, { save: false });
+            }
+            if (saveTimerId) {
+                GLib.source_remove(saveTimerId);
+                saveTimerId = 0;
+            }
+            saveTimerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 150, () => {
+                saveTimerId = 0;
+                if (globalThis.isleSaveSettings) globalThis.isleSaveSettings();
+                return GLib.SOURCE_REMOVE;
+            });
+        });
+        card.append(scale);
+
+        const unsub = globalThis.isleOnChargeLimitChanged
+            ? globalThis.isleOnChargeLimitChanged(({ percent }) => {
+                if (Math.round(scale.get_value()) === percent) {
+                    updateButtons(percent);
+                    return;
+                }
+                syncing = true;
+                scale.set_value(percent);
+                syncing = false;
+                updateButtons(percent);
+            })
+            : null;
+
+        card.connect('destroy', () => {
+            if (saveTimerId) {
+                GLib.source_remove(saveTimerId);
+                saveTimerId = 0;
+            }
+            if (unsub) unsub();
+        });
 
         return card;
     }

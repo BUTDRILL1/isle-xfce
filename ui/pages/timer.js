@@ -70,14 +70,21 @@ export const TimerPage = GObject.registerClass({
         this._swLaps = [];
 
         // Alarm state
-        this._alarmHour = 7;
-        this._alarmMin = 0;
+        const savedAlarm = globalThis.isleAlarmSettings || {};
+        const hr = Math.round(Number(savedAlarm.hour));
+        const mn = Math.round(Number(savedAlarm.min));
+        this._alarmHour = Number.isFinite(hr) ? Math.max(0, Math.min(23, hr)) : 7;
+        this._alarmMin = Number.isFinite(mn) ? Math.max(0, Math.min(59, mn)) : 0;
         this._alarmActive = false;
         this._alarmTimerId = 0;
 
         globalThis.isleTimerPage = this;
 
         this._buildUi();
+        this._renderAlarmTime();
+        if (savedAlarm.active) {
+            this._toggleAlarm({ save: false });
+        }
 
         this.watch(['pomodoro'], () => this._update());
         this.watch(['pomodoroConfig'], () => this._syncSteppers());
@@ -698,16 +705,27 @@ export const TimerPage = GObject.registerClass({
         return row;
     }
 
+    _persistAlarm() {
+        globalThis.isleAlarmSettings = {
+            hour: this._alarmHour,
+            min: this._alarmMin,
+            active: Boolean(this._alarmActive),
+        };
+        if (globalThis.isleSaveSettings) globalThis.isleSaveSettings();
+    }
+
     _stepAlarmHour(delta) {
         this._alarmHour = (this._alarmHour + delta + 24) % 24;
         this._alarmHourVal.set_text(String(this._alarmHour).padStart(2, '0'));
         this._renderAlarmTime();
+        this._persistAlarm();
     }
 
     _stepAlarmMin(delta) {
         this._alarmMin = (this._alarmMin + delta + 60) % 60;
         this._alarmMinVal.set_text(String(this._alarmMin).padStart(2, '0'));
         this._renderAlarmTime();
+        this._persistAlarm();
     }
 
     _addAlarmOffset(mins) {
@@ -719,6 +737,8 @@ export const TimerPage = GObject.registerClass({
         this._renderAlarmTime();
         if (!this._alarmActive) {
             this._toggleAlarm();
+        } else {
+            this._persistAlarm();
         }
     }
 
@@ -730,7 +750,7 @@ export const TimerPage = GObject.registerClass({
         }
     }
 
-    _toggleAlarm() {
+    _toggleAlarm({ save = true } = {}) {
         this._alarmActive = !this._alarmActive;
         if (this._alarmActive) {
             this._alarmToggleBtn.set_label('Alarm On');
@@ -749,6 +769,9 @@ export const TimerPage = GObject.registerClass({
                 GLib.Source.remove(this._alarmTimerId);
                 this._alarmTimerId = 0;
             }
+        }
+        if (save) {
+            this._persistAlarm();
         }
     }
 
@@ -781,6 +804,7 @@ export const TimerPage = GObject.registerClass({
         this._alarmToggleBtn.set_label('Set Alarm');
         this._alarmToggleBtn.remove_css_class('isle-pill-accent');
         this._alarmHintLbl.set_text("Time's Up!");
+        this._persistAlarm();
 
         // 1. Play alert sound
         if (globalThis.isleSoundEnabled !== false) {

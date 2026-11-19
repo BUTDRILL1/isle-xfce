@@ -27,6 +27,7 @@ import { TasksPage } from './pages/tasks.js';
 import { TimerPage } from './pages/timer.js';
 import { UsagePage } from './pages/usage.js';
 import * as Format from './format.js';
+import { getPowerProfile, setPowerProfile } from './telemetry.js';
 
 export function init() {
     print('[Isle GJS] Initializing Isle UI Frontend with D-Bus Daemon Integration...');
@@ -86,6 +87,184 @@ export function init() {
     const notificationCenter = new NotificationCenter();
     globalThis.isleNotifications = notificationCenter;
 
+    // 3b. Settings persistence, Glass Opacity & Battery Charge Limit controls
+    // Loaded before building pages so DevicesPage and SettingsPage read persisted values on init.
+    const settingsDir = GLib.build_filenamev([GLib.get_user_config_dir(), 'isle']);
+    const settingsPath = GLib.build_filenamev([settingsDir, 'settings.json']);
+
+    let currentGlassOpacity = 15;
+    globalThis.isleSoundEnabled = true;
+    globalThis.isleTabSwitchMode = 'hover';
+    globalThis.isleTabHoverHoldTime = 500;
+    globalThis.isleChargeLimitEnabled = true;
+    globalThis.isleChargeLimitPercent = 70;
+    globalThis.isleDndEnabled = false;
+    globalThis.islePowerProfile = null;
+    globalThis.isleWizSettings = {
+        musicTheme: 'rainbow',
+        musicSource: 'system',
+        screenRegion: 'full_screen',
+        fps: 20,
+        brightness: 80,
+    };
+    globalThis.isleCalendarViewMode = 'month';
+    globalThis.isleAlarmSettings = { hour: 7, min: 0, active: false };
+
+    const VALID_POWER_PROFILES = new Set(['power-saver', 'balanced', 'performance', 'lightning']);
+    const clampInt = (v, min, max, fallback) => {
+        const n = Math.round(Number(v));
+        return Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : fallback;
+    };
+    const clampChargeLimit = (v) => clampInt(v, 40, 95, 70);
+
+    const chargeLimitListeners = new Set();
+
+    const loadSettings = () => {
+        try {
+            const f = Gio.File.new_for_path(settingsPath);
+            if (f.query_exists(null)) {
+                const [ok, contents] = f.load_contents(null);
+                if (ok) {
+                    const data = JSON.parse(new TextDecoder().decode(contents));
+                    if (data.glassOpacity !== undefined) currentGlassOpacity = data.glassOpacity;
+                    if (data.clockFormat) Format.setClockFormat(data.clockFormat);
+                    if (data.soundEnabled !== undefined) globalThis.isleSoundEnabled = Boolean(data.soundEnabled);
+                    if (data.tabSwitchMode) globalThis.isleTabSwitchMode = data.tabSwitchMode;
+                    if (data.tabHoverHoldTime !== undefined) globalThis.isleTabHoverHoldTime = Number(data.tabHoverHoldTime);
+                    if (data.chargeLimitEnabled !== undefined) globalThis.isleChargeLimitEnabled = Boolean(data.chargeLimitEnabled);
+                    if (data.chargeLimitPercent !== undefined) globalThis.isleChargeLimitPercent = clampChargeLimit(data.chargeLimitPercent);
+                    if (data.dndEnabled !== undefined) globalThis.isleDndEnabled = Boolean(data.dndEnabled);
+                    if (typeof data.powerProfile === 'string' && VALID_POWER_PROFILES.has(data.powerProfile)) {
+                        globalThis.islePowerProfile = data.powerProfile;
+                    }
+                    if (data.wiz && typeof data.wiz === 'object') {
+                        const w = data.wiz;
+                        globalThis.isleWizSettings = {
+                            musicTheme: typeof w.musicTheme === 'string' ? w.musicTheme : 'rainbow',
+                            musicSource: w.musicSource === 'mic' ? 'mic' : 'system',
+                            screenRegion: typeof w.screenRegion === 'string' ? w.screenRegion : 'full_screen',
+                            fps: clampInt(w.fps, 5, 60, 20),
+                            brightness: clampInt(w.brightness, 10, 100, 80),
+                        };
+                    }
+                    if (data.calendarViewMode === 'week' || data.calendarViewMode === 'month') {
+                        globalThis.isleCalendarViewMode = data.calendarViewMode;
+                    }
+                    if (data.alarm && typeof data.alarm === 'object') {
+                        globalThis.isleAlarmSettings = {
+                            hour: clampInt(data.alarm.hour, 0, 23, 7),
+                            min: clampInt(data.alarm.min, 0, 59, 0),
+                            active: Boolean(data.alarm.active),
+                        };
+                    }
+                }
+            }
+        } catch (e) {
+            print('[Isle] Could not load settings:', e.message);
+        }
+    };
+
+    const saveSettings = () => {
+        try {
+            GLib.mkdir_with_parents(settingsDir, 0o755);
+            const w = globalThis.isleWizSettings || {};
+            const a = globalThis.isleAlarmSettings || {};
+            const data = {
+                glassOpacity: currentGlassOpacity,
+                clockFormat: Format.uses12Hour() ? '12h' : '24h',
+                soundEnabled: globalThis.isleSoundEnabled !== false,
+                tabSwitchMode: globalThis.isleTabSwitchMode || 'hover',
+                tabHoverHoldTime: globalThis.isleTabHoverHoldTime || 500,
+                chargeLimitEnabled: Boolean(globalThis.isleChargeLimitEnabled),
+                chargeLimitPercent: clampChargeLimit(globalThis.isleChargeLimitPercent),
+                dndEnabled: Boolean(globalThis.isleDndEnabled),
+                powerProfile: VALID_POWER_PROFILES.has(globalThis.islePowerProfile) ? globalThis.islePowerProfile : null,
+                wiz: {
+                    musicTheme: typeof w.musicTheme === 'string' ? w.musicTheme : 'rainbow',
+                    musicSource: w.musicSource === 'mic' ? 'mic' : 'system',
+                    screenRegion: typeof w.screenRegion === 'string' ? w.screenRegion : 'full_screen',
+                    fps: clampInt(w.fps, 5, 60, 20),
+                    brightness: clampInt(w.brightness, 10, 100, 80),
+                },
+                calendarViewMode: globalThis.isleCalendarViewMode === 'week' ? 'week' : 'month',
+                alarm: {
+                    hour: clampInt(a.hour, 0, 23, 7),
+                    min: clampInt(a.min, 0, 59, 0),
+                    active: Boolean(a.active),
+                },
+            };
+            const f = Gio.File.new_for_path(settingsPath);
+            f.replace_contents(JSON.stringify(data, null, 2), null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
+        } catch (e) {
+            print('[Isle] Could not save settings:', e.message);
+        }
+    };
+    globalThis.isleSaveSettings = saveSettings;
+
+    globalThis.isleGetChargeLimit = () => ({
+        enabled: Boolean(globalThis.isleChargeLimitEnabled),
+        percent: clampChargeLimit(globalThis.isleChargeLimitPercent),
+    });
+
+    globalThis.isleOnChargeLimitChanged = (fn) => {
+        chargeLimitListeners.add(fn);
+        return () => chargeLimitListeners.delete(fn);
+    };
+
+    globalThis.isleSetChargeLimit = ({ enabled, percent } = {}, { save = true } = {}) => {
+        if (enabled !== undefined) {
+            globalThis.isleChargeLimitEnabled = Boolean(enabled);
+        }
+        if (percent !== undefined) {
+            globalThis.isleChargeLimitPercent = clampChargeLimit(percent);
+        }
+        if (save) {
+            saveSettings();
+        }
+        const snapshot = globalThis.isleGetChargeLimit();
+        for (const fn of chargeLimitListeners) {
+            try {
+                fn(snapshot);
+            } catch (e) {
+                print('[Isle] Charge limit listener error:', e.message);
+            }
+        }
+        return snapshot;
+    };
+
+    const glassProvider = new Gtk.CssProvider();
+    Gtk.StyleContext.add_provider_for_display(win.get_display(), glassProvider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 20);
+
+    const glArea = overlay.get_child();
+
+    globalThis.isleSetGlassOpacity = (percent) => {
+        currentGlassOpacity = percent;
+        saveSettings();
+        const val = percent > 1 ? percent / 100.0 : percent;
+        if (glArea && glArea.set_opacity) {
+            glArea.set_opacity(Math.min(1.0, val / 0.15));
+        }
+        glassProvider.load_from_string(`
+            .isle-overlay {
+                background-color: rgba(20, 20, 22, ${val.toFixed(2)});
+            }
+        `);
+    };
+    globalThis.isleGetGlassOpacity = () => currentGlassOpacity;
+
+    loadSettings();
+    globalThis.isleSetGlassOpacity(currentGlassOpacity);
+
+    notificationCenter.dnd = Boolean(globalThis.isleDndEnabled);
+    notificationCenter.connect('dnd-changed', () => {
+        globalThis.isleDndEnabled = Boolean(notificationCenter.dnd);
+        saveSettings();
+    });
+
+    if (globalThis.islePowerProfile && globalThis.islePowerProfile !== getPowerProfile()) {
+        setPowerProfile(globalThis.islePowerProfile, null, { silent: true });
+    }
+
     // 4. Build authentic Page instances for the 10 canonical Isle tabs
     const mediaPage = new MediaPage(daemon);
     const notificationsPage = new NotificationsPage(daemon, notificationCenter);
@@ -133,75 +312,6 @@ export function init() {
     notificationCenter.connect('banner', (_center, notification) => {
         compactView.showNotificationPeek(notification);
     });
-
-    // 6. Settings persistence and Glass Opacity control
-    const settingsDir = GLib.build_filenamev([GLib.get_user_config_dir(), 'isle']);
-    const settingsPath = GLib.build_filenamev([settingsDir, 'settings.json']);
-    
-    let currentGlassOpacity = 15;
-    globalThis.isleSoundEnabled = true;
-    globalThis.isleTabSwitchMode = 'hover';
-    globalThis.isleTabHoverHoldTime = 500;
-
-    const loadSettings = () => {
-        try {
-            const f = Gio.File.new_for_path(settingsPath);
-            if (f.query_exists(null)) {
-                const [ok, contents] = f.load_contents(null);
-                if (ok) {
-                    const data = JSON.parse(new TextDecoder().decode(contents));
-                    if (data.glassOpacity !== undefined) currentGlassOpacity = data.glassOpacity;
-                    if (data.clockFormat) Format.setClockFormat(data.clockFormat);
-                    if (data.soundEnabled !== undefined) globalThis.isleSoundEnabled = Boolean(data.soundEnabled);
-                    if (data.tabSwitchMode) globalThis.isleTabSwitchMode = data.tabSwitchMode;
-                    if (data.tabHoverHoldTime !== undefined) globalThis.isleTabHoverHoldTime = Number(data.tabHoverHoldTime);
-                }
-            }
-        } catch (e) {
-            print('[Isle] Could not load settings:', e.message);
-        }
-    };
-
-    const saveSettings = () => {
-        try {
-            GLib.mkdir_with_parents(settingsDir, 0o755);
-            const data = {
-                glassOpacity: currentGlassOpacity,
-                clockFormat: Format.uses12Hour() ? '12h' : '24h',
-                soundEnabled: globalThis.isleSoundEnabled !== false,
-                tabSwitchMode: globalThis.isleTabSwitchMode || 'hover',
-                tabHoverHoldTime: globalThis.isleTabHoverHoldTime || 500,
-            };
-            const f = Gio.File.new_for_path(settingsPath);
-            f.replace_contents(JSON.stringify(data, null, 2), null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
-        } catch (e) {
-            print('[Isle] Could not save settings:', e.message);
-        }
-    };
-    globalThis.isleSaveSettings = saveSettings;
-
-    const glassProvider = new Gtk.CssProvider();
-    Gtk.StyleContext.add_provider_for_display(win.get_display(), glassProvider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 20);
-
-    const glArea = overlay.get_child();
-
-    globalThis.isleSetGlassOpacity = (percent) => {
-        currentGlassOpacity = percent;
-        saveSettings();
-        const val = percent > 1 ? percent / 100.0 : percent;
-        if (glArea && glArea.set_opacity) {
-            glArea.set_opacity(Math.min(1.0, val / 0.15));
-        }
-        glassProvider.load_from_string(`
-            .isle-overlay {
-                background-color: rgba(20, 20, 22, ${val.toFixed(2)});
-            }
-        `);
-    };
-    globalThis.isleGetGlassOpacity = () => currentGlassOpacity;
-
-    loadSettings();
-    globalThis.isleSetGlassOpacity(currentGlassOpacity);
 
     // Connect settings gear from header
     expandedView.connect('settings-requested', () => {

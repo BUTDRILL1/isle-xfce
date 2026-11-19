@@ -64,7 +64,7 @@ export const CalendarPage = GObject.registerClass({
         });
 
         const now = new Date();
-        this._viewMode = 'month'; // 'month' | 'week'
+        this._viewMode = globalThis.isleCalendarViewMode === 'week' ? 'week' : 'month'; // 'month' | 'week'
         this._selectedDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
         this._cursorDate = new Date(now.getFullYear(), now.getMonth(), 1);
         this._edsEvents = [];
@@ -160,11 +160,11 @@ export const CalendarPage = GObject.registerClass({
         });
         this._monthModeBtn = new Gtk.Button({
             label: 'Month',
-            css_classes: ['isle-cal-mode-btn', 'active'],
+            css_classes: ['isle-cal-mode-btn', ...(this._viewMode === 'month' ? ['active'] : [])],
         });
         this._weekModeBtn = new Gtk.Button({
             label: 'Week',
-            css_classes: ['isle-cal-mode-btn'],
+            css_classes: ['isle-cal-mode-btn', ...(this._viewMode === 'week' ? ['active'] : [])],
         });
         this._monthModeBtn.connect('clicked', () => this._setViewMode('month'));
         this._weekModeBtn.connect('clicked', () => this._setViewMode('week'));
@@ -192,6 +192,8 @@ export const CalendarPage = GObject.registerClass({
         this._viewMode = mode;
         this._monthModeBtn.set_css_classes(['isle-cal-mode-btn', ...(mode === 'month' ? ['active'] : [])]);
         this._weekModeBtn.set_css_classes(['isle-cal-mode-btn', ...(mode === 'week' ? ['active'] : [])]);
+        globalThis.isleCalendarViewMode = mode;
+        if (globalThis.isleSaveSettings) globalThis.isleSaveSettings();
         this._update();
     }
 

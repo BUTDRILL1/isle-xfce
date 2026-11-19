@@ -52,15 +52,16 @@ export const LightsPage = GObject.registerClass({
             available: true,
         });
 
+        const saved = globalThis.isleWizSettings || {};
         this._connected = false;
         this._bulbIp = null;
         this._powerOn = true;
         this._mode = 'static';
-        this._musicTheme = 'rainbow';
-        this._musicSource = 'system';
-        this._screenRegion = 'full_screen';
-        this._brightness = 80;
-        this._fps = 20;
+        this._musicTheme = MUSIC_THEMES.some(t => t.id === saved.musicTheme) ? saved.musicTheme : 'rainbow';
+        this._musicSource = saved.musicSource === 'mic' ? 'mic' : 'system';
+        this._screenRegion = SCREEN_REGIONS.some(r => r.id === saved.screenRegion) ? saved.screenRegion : 'full_screen';
+        this._brightness = Math.max(10, Math.min(100, Math.round(Number(saved.brightness) || 80)));
+        this._fps = Math.max(5, Math.min(60, Math.round(Number(saved.fps) || 20)));
         this._syncingUi = false;
 
         this._proc = null;
@@ -148,6 +149,17 @@ export const LightsPage = GObject.registerClass({
                 this._updatePowerBtn();
             }
         } catch (_e) {}
+    }
+
+    _persistWiz() {
+        globalThis.isleWizSettings = {
+            musicTheme: this._musicTheme,
+            musicSource: this._musicSource,
+            screenRegion: this._screenRegion,
+            fps: this._fps,
+            brightness: this._brightness,
+        };
+        if (globalThis.isleSaveSettings) globalThis.isleSaveSettings();
     }
 
     _updatePowerBtn() {
@@ -321,6 +333,7 @@ export const LightsPage = GObject.registerClass({
                 for (const [id, b] of Object.entries(this._themeBtns)) {
                     b.set_css_classes(['isle-output-chip', id === t.id ? 'active' : 'idle']);
                 }
+                this._persistWiz();
                 this._send({ cmd: 'music', theme: this._musicTheme, source: this._musicSource });
             });
             this._themeBtns[t.id] = btn;
@@ -328,13 +341,14 @@ export const LightsPage = GObject.registerClass({
         }
         this._musicBox.append(new Gtk.Box({ hexpand: true }));
         this._sourceBtn = new Gtk.Button({
-            label: 'System',
+            label: this._musicSource === 'system' ? 'System' : 'Mic',
             css_classes: ['isle-output-chip', 'active'],
             tooltip_text: 'Toggle System Audio / Mic',
         });
         this._sourceBtn.connect('clicked', () => {
             this._musicSource = this._musicSource === 'system' ? 'mic' : 'system';
             this._sourceBtn.set_label(this._musicSource === 'system' ? 'System' : 'Mic');
+            this._persistWiz();
             this._send({ cmd: 'music', theme: this._musicTheme, source: this._musicSource });
         });
         this._musicBox.append(this._sourceBtn);
@@ -359,6 +373,7 @@ export const LightsPage = GObject.registerClass({
                 for (const [id, b] of Object.entries(this._regionBtns)) {
                     b.set_css_classes(['isle-output-chip', id === r.id ? 'active' : 'idle']);
                 }
+                this._persistWiz();
                 this._send({ cmd: 'screen', region: this._screenRegion });
             });
             this._regionBtns[r.id] = btn;
@@ -400,6 +415,7 @@ export const LightsPage = GObject.registerClass({
             if (this._syncingUi) return;
             this._brightness = Math.round(10 + val * 90);
             this._brightVal.set_text(`${this._brightness}%`);
+            this._persistWiz();
             this._send({ cmd: 'brightness', value: this._brightness });
         });
         brightRow.append(this._brightSlider);
@@ -430,6 +446,7 @@ export const LightsPage = GObject.registerClass({
             if (this._syncingUi) return;
             this._fps = Math.round(5 + val * 55);
             this._fpsVal.set_text(`${this._fps} FPS · ${Math.round(1000 / this._fps)}ms`);
+            this._persistWiz();
             this._send({ cmd: 'fps', value: this._fps });
         });
         this._fpsRow.append(this._fpsSlider);
@@ -459,8 +476,10 @@ export const LightsPage = GObject.registerClass({
         if (mode === 'static') {
             this._send({ cmd: 'static', temp: 3500 });
         } else if (mode === 'music') {
+            this._send({ cmd: 'fps', value: this._fps });
             this._send({ cmd: 'music', theme: this._musicTheme, source: this._musicSource });
         } else if (mode === 'screen') {
+            this._send({ cmd: 'fps', value: this._fps });
             this._send({ cmd: 'screen', region: this._screenRegion });
         }
     }

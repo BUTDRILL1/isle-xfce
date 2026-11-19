@@ -18,6 +18,7 @@ import {
     getPowerProfile,
     getTelemetryMonitor,
     getWifiSignal,
+    isAcPluggedIn,
 } from './telemetry.js';
 import { BotIcon, PrivacyDots, Ring, WifiIndicator, icon, label, pillButton } from './widgets.js';
 
@@ -99,6 +100,16 @@ export const CompactView = GObject.registerClass({
         this._telemetryMonitor.connect('power-changed', () => this._syncBotPowerColor());
         this._telemetryMonitor.connect('updated', () => this._syncCompactStats());
         this._telemetryMonitor.connect('volume-changed', () => this._syncVolumeLabel());
+        this._chargeLimitUnsub = globalThis.isleOnChargeLimitChanged
+            ? globalThis.isleOnChargeLimitChanged(() => this._syncBatteryCapColor())
+            : null;
+        this._syncBatteryCapColor();
+        this.connect('destroy', () => {
+            if (this._chargeLimitUnsub) {
+                this._chargeLimitUnsub();
+                this._chargeLimitUnsub = null;
+            }
+        });
 
         // Center Slot: Date, Time, and Meridiem
         this._centerBox = new Gtk.Box({
@@ -419,6 +430,19 @@ export const CompactView = GObject.registerClass({
         }
     }
 
+    _syncBatteryCapColor(bat = null) {
+        if (!this._batStack) return;
+        const cap = globalThis.isleGetChargeLimit
+            ? globalThis.isleGetChargeLimit()
+            : { enabled: false };
+        const battery = bat ?? getBatteryTelemetry(this._daemon?.state?.system?.battery);
+        if (cap.enabled && Boolean(battery?.isPlugged || isAcPluggedIn())) {
+            this._batStack.add_css_class('capped');
+        } else {
+            this._batStack.remove_css_class('capped');
+        }
+    }
+
     _syncCompactStats() {
         if (this._batStack && this._batTop && this._batBot) {
             const bat = getBatteryTelemetry(this._daemon?.state?.system?.battery);
@@ -427,6 +451,7 @@ export const CompactView = GObject.registerClass({
                 if (bat.isCharging) this._batStack.add_css_class('charging');
                 else this._batStack.remove_css_class('charging');
             }
+            this._syncBatteryCapColor(bat);
         }
         if (this._wifiIndicator) {
             this._wifiIndicator.update(getWifiSignal());
@@ -471,6 +496,10 @@ export const CompactView = GObject.registerClass({
     }
 
     destroy() {
+        if (this._chargeLimitUnsub) {
+            this._chargeLimitUnsub();
+            this._chargeLimitUnsub = null;
+        }
         if (this._tickId) {
             GLib.source_remove(this._tickId);
             this._tickId = 0;

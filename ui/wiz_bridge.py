@@ -6,6 +6,7 @@ import collections
 import colorsys
 import ctypes
 import json
+import math
 import os
 import random
 import select
@@ -82,7 +83,12 @@ def udp_rpc(ip, method, params=None, timeout=0.8, broadcast=False):
 
 
 class MusicSyncEngine:
-    """Self-contained PipeWire audio-reactive WiZ sync engine with strict silence gating."""
+    """Self-contained PipeWire audio-reactive WiZ sync engine.
+    Features 2048-sample Hann-windowed FFT, raw bass beat detection, AGC volume
+    normalization, dt-scaled smooth themes, delta-4 deadband, and strict silence gating.
+    """
+
+    FFT_SIZE = 2048  # 23.4 Hz bin resolution at 48 kHz (10 bass bins in 20–250 Hz)
 
     def __init__(self, bulb_ip, theme="rainbow", source="system", brightness=80, fps=20):
         self.bulb_ip = bulb_ip
@@ -99,15 +105,22 @@ class MusicSyncEngine:
         self.mid_smooth = 0.0
         self.high_smooth = 0.0
         self.current_volume = 0.0
-        self.beat_history = collections.deque(maxlen=43)
+        self.agc_peak = 0.08
+        self.avg_rms = 0.0
+        self.rms_frames = 0
+        self.beat_history = collections.deque(maxlen=94)  # ~1s of hops at 94 Hz
+        self.prev_kick_mag = None
+        self.beat_kick = 0.0
         self.last_beat_time = 0.0
+        self.pending_beat = False
         self.club_idx = 0
         self.fire_last = 0.0
         self.fire_rgb = (255, 100, 0)
-        self.sesh_idx = 0
-        self.wave_phase = 0.0
+        self.sesh_last_beat_time = 0.0
+        self.smooth_rgb = None
         self.last_rgb = (255, 160, 80)
-        self.last_sent = None
+        self.last_sent_rgb = None
+        self.last_sent_dim = None
 
     def start(self):
         if self.running:
@@ -131,7 +144,9 @@ class MusicSyncEngine:
     def set_theme(self, theme):
         if theme in MUSIC_THEMES:
             self.theme = theme
-            self.last_sent = None
+            self.smooth_rgb = None
+            self.last_sent_rgb = None
+            self.last_sent_dim = None
 
     def set_brightness(self, brightness):
         self.brightness = max(10, min(100, int(brightness)))
@@ -139,91 +154,147 @@ class MusicSyncEngine:
     def set_interval(self, interval):
         self.interval = max(0.015, min(0.5, float(interval)))
 
-    def _send_rgb(self, r, g, b, dimming):
-        pkt = (int(r), int(g), int(b), max(10, min(100, int(dimming))))
-        if pkt == self.last_sent:
-            return
-        self.last_sent = pkt
+    def _send_rgb(self, r, g, b, dimming, force=False):
+        rgb = (max(0, min(255, int(r))), max(0, min(255, int(g))), max(0, min(255, int(b))))
+        dim = max(10, min(100, int(dimming)))
+        if not force and self.last_sent_rgb is not None and self.last_sent_dim == dim:
+            if sum(abs(a - b) for a, b in zip(rgb, self.last_sent_rgb)) < 4:
+                return
+        self.last_sent_rgb = rgb
+        self.last_sent_dim = dim
         payload = json.dumps({
             "method": "setPilot",
-            "params": {"r": pkt[0], "g": pkt[1], "b": pkt[2], "dimming": pkt[3]},
+            "params": {"r": rgb[0], "g": rgb[1], "b": rgb[2], "dimming": dim},
         }).encode("utf-8")
         try:
             self.sock.sendto(payload, (self.bulb_ip, WIZ_PORT))
         except Exception:
             pass
 
-    def _compute_bands(self, np, samples):
-        if samples.size == 0 or float(np.max(np.abs(samples))) < 1e-5:
-            return 0.0, 0.0, 0.0
-        fft_mag = np.abs(np.fft.rfft(samples))
-        freqs = np.fft.rfftfreq(len(samples), 1.0 / SAMPLE_RATE)
-        bass = float(fft_mag[(freqs >= 20) & (freqs < 250)].mean()) if fft_mag.size else 0.0
-        mid = float(fft_mag[(freqs >= 250) & (freqs < 2000)].mean()) if fft_mag.size else 0.0
-        high = float(fft_mag[(freqs >= 2000) & (freqs < 8000)].mean()) if fft_mag.size else 0.0
-        total = bass + mid + high + 1e-9
-        return bass / total, mid / total, high / total
+    def _compute_bands(self, np, window, freqs, ring):
+        """Returns (bass, mid, high) ratios and the kick-band spectral flux."""
+        if float(np.max(np.abs(ring))) < 1e-5:
+            self.prev_kick_mag = None
+            return 0.0, 0.0, 0.0, 0.0
+        fft_mag = np.abs(np.fft.rfft(ring * window))
+        bass_raw = float(fft_mag[(freqs >= 20) & (freqs < 250)].mean())
+        mid_raw = float(fft_mag[(freqs >= 250) & (freqs < 2000)].mean())
+        high_raw = float(fft_mag[(freqs >= 2000) & (freqs < 8000)].mean())
+        total = bass_raw + mid_raw + high_raw + 1e-9
 
-    def _detect_beat(self, bass, rms):
-        if len(self.beat_history) < 10:
-            self.beat_history.append(bass)
+        # Spectral flux on the kick band (40–160 Hz), log-compressed: reacts on the
+        # very hop a kick lands instead of waiting for the 2048 window's average to rise.
+        kick = np.log1p(fft_mag[(freqs >= 40) & (freqs < 160)] * 4.0)
+        if self.prev_kick_mag is None or self.prev_kick_mag.shape != kick.shape:
+            flux = 0.0
+        else:
+            flux = float(np.maximum(0.0, kick - self.prev_kick_mag).sum())
+        self.prev_kick_mag = kick
+        return bass_raw / total, mid_raw / total, high_raw / total, flux
+
+    def _detect_beat(self, flux, rms):
+        """Adaptive onset threshold: mean + k·std of the last ~1s of kick flux."""
+        hist = self.beat_history
+        if len(hist) < 24:
+            hist.append(flux)
             return False
-        avg = sum(self.beat_history) / len(self.beat_history)
-        var = sum((x - avg) ** 2 for x in self.beat_history) / len(self.beat_history)
-        thresh = -0.0025714 * var + 1.5142857
-        self.beat_history.append(bass)
-        if rms < 0.012:
+        n = len(hist)
+        mean = sum(hist) / n
+        std = math.sqrt(max(0.0, sum((x - mean) ** 2 for x in hist) / n))
+        hist.append(flux)
+        if rms < 0.004 or flux <= 1e-4:
             return False
         now = time.perf_counter()
-        if bass > avg * thresh and (now - self.last_beat_time) > 0.15:
+        if flux > mean + 1.5 * std and flux > mean * 1.35 and (now - self.last_beat_time) > 0.14:
             self.last_beat_time = now
+            self.beat_kick = 1.0
             return True
         return False
 
-    def _render_frame(self, is_beat):
+    def _render_frame(self, is_beat, dt):
         cfg = MUSIC_THEMES.get(self.theme, MUSIC_THEMES["rainbow"])
         mode = cfg["mode"]
         palette = cfg.get("palette")
-        min_b = max(10, int(self.brightness * 0.25))
-        max_b = self.brightness
+        min_b = 30.0
+        max_b = 100.0
+        dt_scale = min(3.0, max(0.2, dt / 0.05))  # Normalized to 20 FPS reference
 
-        if mode == "cycle":
-            self.hue = (self.hue + 0.012 + self.high_smooth * 0.05) % 1.0
-            r, g, b = [int(c * 255) for c in colorsys.hsv_to_rgb(self.hue, 1.0, 1.0)]
-            dim = min_b + self.current_volume * (max_b - min_b)
-        elif mode == "bass_strobe":
+        if mode == "bass_strobe":
             if is_beat:
                 self.club_idx = (self.club_idx + 1) % len(palette)
-            r, g, b = palette[self.club_idx]
-            dim = min_b + self.bass_smooth * (max_b - min_b)
+            target_rgb = palette[self.club_idx]
+            raw_b = min_b + self.bass_smooth * (max_b - min_b)
             if is_beat:
-                dim = min(max_b, dim * 1.25)
+                raw_b = min(100.0, raw_b * 1.3)
+            # Snappy club transitions: no heavy color lerp
+            self.smooth_rgb = tuple(float(c) for c in target_rgb)
         elif mode == "flicker":
             now = time.perf_counter()
-            if now - self.fire_last > 0.09:
+            if now - self.fire_last > 0.1:
                 base = random.choice(palette)
                 f = random.uniform(0.65, 1.0)
                 self.fire_rgb = tuple(int(c * f) for c in base)
                 self.fire_last = now
-            r, g, b = self.fire_rgb
-            dim = min_b + (0.45 + self.bass_smooth * 0.55) * (max_b - min_b)
+            target_rgb = self.fire_rgb
+            raw_b = min_b + (0.5 + self.bass_smooth * 0.5) * (max_b - min_b)
         elif mode == "wave":
-            self.wave_phase = (self.wave_phase + 0.02 + self.mid_smooth * 0.05) % 1.0
-            i0 = int(self.wave_phase * len(palette)) % len(palette)
-            i1 = (i0 + 1) % len(palette)
-            frac = (self.wave_phase * len(palette)) % 1.0
-            r = int(palette[i0][0] * (1 - frac) + palette[i1][0] * frac)
-            g = int(palette[i0][1] * (1 - frac) + palette[i1][1] * frac)
-            b = int(palette[i0][2] * (1 - frac) + palette[i1][2] * frac)
-            dim = min_b + (0.3 + self.current_volume * 0.7) * (max_b - min_b)
-        else:
+            base, peak, sparkle = palette
+            self.hue = (self.hue + 0.004 * dt_scale) % 1.0
+            t = (math.sin(self.hue * 2.0 * math.pi) + 1.0) / 2.0
+            r = base[0] + (peak[0] - base[0]) * t
+            g = base[1] + (peak[1] - base[1]) * t
+            b = base[2] + (peak[2] - base[2]) * t
+            if self.high_smooth > 0.35:
+                blend = min(1.0, (self.high_smooth - 0.35) * 2.5)
+                r += (sparkle[0] - r) * blend
+                g += (sparkle[1] - g) * blend
+                b += (sparkle[2] - b) * blend
+            target_rgb = (r, g, b)
+            raw_b = min_b + self.current_volume * 0.4 * (max_b - min_b)
+        elif mode == "flow":
+            n = len(palette)
+            self.hue = (self.hue + 0.006 * dt_scale) % 1.0
+            scaled = self.hue * n
+            i0 = int(scaled) % n
+            i1 = (i0 + 1) % n
+            t = scaled - int(scaled)
+            smooth_t = (1.0 - math.cos(t * math.pi)) / 2.0
+            c1, c2 = palette[i0], palette[i1]
+            target_rgb = (
+                c1[0] + (c2[0] - c1[0]) * smooth_t,
+                c1[1] + (c2[1] - c1[1]) * smooth_t,
+                c1[2] + (c2[2] - c1[2]) * smooth_t,
+            )
+            raw_b = 20.0 + self.mid_smooth * 0.35 * 60.0
             if is_beat:
-                self.sesh_idx = (self.sesh_idx + 1) % len(palette)
-            r, g, b = palette[self.sesh_idx]
-            dim = min_b + self.current_volume * (max_b - min_b)
+                self.sesh_last_beat_time = time.perf_counter()
+            pulse = max(0.0, 1.0 - (time.perf_counter() - self.sesh_last_beat_time) / 0.3)
+            raw_b = min(100.0, raw_b + pulse * 14.0)
+        else:  # rainbow cycle: hue speed scales strictly with volume
+            self.hue = (self.hue + 0.08 * self.current_volume * dt_scale) % 1.0
+            r, g, b = colorsys.hsv_to_rgb(self.hue, 1.0, 1.0)
+            target_rgb = (r * 255.0, g * 255.0, b * 255.0)
+            raw_b = min_b + self.current_volume * (max_b - min_b)
 
-        self.last_rgb = (r, g, b)
-        self._send_rgb(r, g, b, dim)
+        if self.smooth_rgb is None or mode in ("bass_strobe", "cycle", "flicker"):
+            # Beat-driven themes: no colour lag, the bulb follows the music instantly.
+            self.smooth_rgb = tuple(float(c) for c in target_rgb)
+        else:
+            alpha = min(1.0, 0.6 * dt_scale)
+            self.smooth_rgb = tuple(
+                self.smooth_rgb[i] + alpha * (target_rgb[i] - self.smooth_rgb[i])
+                for i in range(3)
+            )
+
+        # Kick punch: a sharp brightness lift on every detected beat, decaying ~180 ms.
+        if mode in ("cycle", "bass_strobe", "flicker", "wave"):
+            raw_b = min(100.0, raw_b + self.beat_kick * 35.0)
+        self.beat_kick = max(0.0, self.beat_kick - dt / 0.18)
+
+        out_rgb = tuple(int(round(c)) for c in self.smooth_rgb)
+        dim = max(10, min(100, int(raw_b * (self.brightness / 100.0))))
+        self.last_rgb = out_rgb
+        self._send_rgb(out_rgb[0], out_rgb[1], out_rgb[2], dim)
 
     def _resolve_device(self):
         if self.source == "mic":
@@ -241,7 +312,7 @@ class MusicSyncEngine:
             [
                 "parec",
                 "--latency-msec=12",
-                f"--format=float32le",
+                "--format=float32le",
                 f"--rate={SAMPLE_RATE}",
                 "--channels=1",
                 "-d",
@@ -269,15 +340,17 @@ class MusicSyncEngine:
         device = self._resolve_device()
         proc = None
         last_device_check = time.perf_counter()
-        last_send = 0.0
+        last_send = time.perf_counter()
         silent_frames = 0
         held_silence = False
         buf = bytearray()
+        ring = np.zeros(self.FFT_SIZE, dtype=np.float32)
+        window = np.hanning(self.FFT_SIZE).astype(np.float32)
+        freqs = np.fft.rfftfreq(self.FFT_SIZE, 1.0 / SAMPLE_RATE)
 
         try:
             proc = self._spawn_parec(device)
             while self.running and proc.poll() is None:
-                # Poll stdout with short timeout so stop() responds immediately
                 rlist, _, _ = select.select([proc.stdout.fileno()], [], [], 0.1)
                 if not rlist:
                     now = time.perf_counter()
@@ -305,37 +378,55 @@ class MusicSyncEngine:
                     del buf[:FRAME_BYTES]
 
                     samples = np.frombuffer(raw, dtype=np.float32)
+                    ring = np.roll(ring, -BUFFER_SIZE)
+                    ring[-BUFFER_SIZE:] = samples
+
                     rms = float(np.sqrt(np.mean(samples ** 2)))
                     now = time.perf_counter()
 
-                    if rms < 0.006:
+                    if rms < 0.0025:
                         silent_frames += 1
-                        self.current_volume *= 0.82
-                        self.bass_smooth *= 0.8
-                        self.mid_smooth *= 0.8
-                        self.high_smooth *= 0.8
-                        if silent_frames > 15:
+                        self.current_volume *= 0.85
+                        self.bass_smooth *= 0.85
+                        self.mid_smooth *= 0.85
+                        self.high_smooth *= 0.85
+                        if silent_frames > 18:
                             if not held_silence:
                                 held_silence = True
-                                min_b = max(10, int(self.brightness * 0.25))
-                                self._send_rgb(self.last_rgb[0], self.last_rgb[1], self.last_rgb[2], min_b)
+                                min_b = max(10, int(self.brightness * 0.28))
+                                self._send_rgb(self.last_rgb[0], self.last_rgb[1], self.last_rgb[2], min_b, force=True)
                             continue
                     else:
                         silent_frames = 0
                         held_silence = False
 
-                    bass, mid, high = self._compute_bands(np, samples)
+                    # Loudness relative to the song's own running average (~1.5s), so kicks
+                    # stand out against the mix whatever the system volume slider is at.
+                    self.rms_frames += 1
+                    avg_alpha = 0.08 if self.rms_frames < 60 else 0.007
+                    self.avg_rms += avg_alpha * (rms - self.avg_rms)
+                    if rms > self.agc_peak:
+                        self.agc_peak += 0.35 * (rms - self.agc_peak)
+                    else:
+                        self.agc_peak = max(0.015, self.agc_peak * 0.9965)
+
+                    bass, mid, high, flux = self._compute_bands(np, window, freqs, ring)
                     self.bass_smooth += 0.5 * (bass - self.bass_smooth)
                     self.mid_smooth += 0.35 * (mid - self.mid_smooth)
                     self.high_smooth += 0.45 * (high - self.high_smooth)
-                    is_beat = self._detect_beat(bass, rms)
-                    target_vol = min(1.0, rms * 9.0)
+
+                    if self._detect_beat(flux, rms):
+                        self.pending_beat = True
+
+                    target_vol = min(1.0, rms / max(0.004, self.avg_rms * 1.8))
                     self.current_volume += 0.5 * (target_vol - self.current_volume)
 
-                    due = (now - last_send) >= self.interval
-                    beat_due = is_beat and (now - last_send) >= max(0.016, self.interval * 0.5)
+                    dt = now - last_send
+                    due = dt >= self.interval
+                    beat_due = self.pending_beat and dt >= 0.012
                     if due or beat_due:
-                        self._render_frame(is_beat)
+                        self._render_frame(self.pending_beat, dt)
+                        self.pending_beat = False
                         last_send = now
 
                 now = time.perf_counter()

@@ -434,7 +434,7 @@ export function getPowerProfile() {
     return 'balanced';
 }
 
-function _runArgvPrivileged(argv, requirePrompt, onComplete) {
+function _runArgvPrivileged(argv, requirePrompt, onComplete, { silent = false } = {}) {
     if (!requirePrompt) {
         try {
             const proc = Gio.Subprocess.new(['sudo', '-n', ...argv], Gio.SubprocessFlags.NONE);
@@ -445,10 +445,19 @@ function _runArgvPrivileged(argv, requirePrompt, onComplete) {
                         return;
                     }
                 } catch (_) {}
-                _runArgvPrivileged(argv, true, onComplete);
+                if (silent) {
+                    if (onComplete) onComplete(false);
+                    return;
+                }
+                _runArgvPrivileged(argv, true, onComplete, { silent });
             });
             return;
         } catch (_) {}
+    }
+
+    if (silent) {
+        if (onComplete) onComplete(false);
+        return;
     }
 
     try {
@@ -479,12 +488,16 @@ function _notifyPowerChanged(profile, onDone) {
     if (onDone) onDone(profile);
 }
 
-export function setPowerProfile(profile, onDone = null) {
+export function setPowerProfile(profile, onDone = null, { silent = false } = {}) {
     const helper = GLib.file_test('/usr/local/bin/isle-lightning', GLib.FileTest.IS_EXECUTABLE)
         ? '/usr/local/bin/isle-lightning'
         : null;
 
     if (profile === 'lightning') {
+        if (silent && !isAcPluggedIn()) {
+            _applyStandardProfile('performance', p => _notifyPowerChanged(p, onDone), { silent: true });
+            return;
+        }
         if (GLib.find_program_in_path('powerprofilesctl')) {
             try {
                 Gio.Subprocess.new(['powerprofilesctl', 'set', 'performance'], Gio.SubprocessFlags.NONE);
@@ -497,7 +510,7 @@ export function setPowerProfile(profile, onDone = null) {
         const requirePrompt = !isAcPluggedIn();
         _runArgvPrivileged(argv, requirePrompt, () => {
             _notifyPowerChanged(getPowerProfile(), onDone);
-        });
+        }, { silent });
         return;
     }
 
@@ -506,12 +519,12 @@ export function setPowerProfile(profile, onDone = null) {
             if (helper) {
                 _runArgvPrivileged([helper, 'saver'], false, () => {
                     _notifyPowerChanged(getPowerProfile(), onDone);
-                });
+                }, { silent });
             } else {
                 _notifyPowerChanged(getPowerProfile(), onDone);
             }
         };
-        _applyStandardProfile('power-saver', applySaver);
+        _applyStandardProfile('power-saver', applySaver, { silent });
         return;
     }
 
@@ -521,15 +534,15 @@ export function setPowerProfile(profile, onDone = null) {
             ? [helper, 'off']
             : ['sh', '-c', 'for f in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo powersave > "$f"; done; echo 1 > /sys/devices/system/cpu/cpufreq/boost 2>/dev/null || true; for g in /sys/class/drm/card*/device/power_dpm_force_performance_level; do echo auto > "$g" 2>/dev/null || true; done'];
         _runArgvPrivileged(argv, false, () => {
-            _applyStandardProfile(profile, p => _notifyPowerChanged(p, onDone));
-        });
+            _applyStandardProfile(profile, p => _notifyPowerChanged(p, onDone), { silent });
+        }, { silent });
         return;
     }
 
-    _applyStandardProfile(profile, p => _notifyPowerChanged(p, onDone));
+    _applyStandardProfile(profile, p => _notifyPowerChanged(p, onDone), { silent });
 }
 
-function _applyStandardProfile(profile, onDone) {
+function _applyStandardProfile(profile, onDone, { silent = false } = {}) {
     if (GLib.find_program_in_path('powerprofilesctl')) {
         try {
             const proc = Gio.Subprocess.new(['powerprofilesctl', 'set', profile], Gio.SubprocessFlags.NONE);
@@ -538,6 +551,11 @@ function _applyStandardProfile(profile, onDone) {
             });
             return;
         } catch (_) {}
+    }
+
+    if (silent) {
+        if (onDone) onDone(getPowerProfile());
+        return;
     }
 
     const eppMap = {
@@ -549,7 +567,7 @@ function _applyStandardProfile(profile, onDone) {
     const cmd = `for f in /sys/devices/system/cpu/cpu*/cpufreq/energy_performance_preference; do echo ${epp} > "$f"; done`;
     _runArgvPrivileged(['sh', '-c', cmd], true, () => {
         if (onDone) onDone(getPowerProfile());
-    });
+    }, { silent });
 }
 
 let _cachedVolume = { percent: -1, muted: false };

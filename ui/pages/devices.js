@@ -104,6 +104,14 @@ export const DevicesPage = GObject.registerClass({
 
         this._buildUi();
 
+        this._chargeLimitUnsub = globalThis.isleOnChargeLimitChanged
+            ? globalThis.isleOnChargeLimitChanged(() => {
+                this._syncBatteryCapUi();
+                this._syncTopCards();
+            })
+            : null;
+        this._syncBatteryCapUi();
+
         this.watch(['system'], () => this._update());
         this._update();
         this._refreshAudio();
@@ -118,6 +126,12 @@ export const DevicesPage = GObject.registerClass({
         this._monitorHandler = this._monitor.connect('updated', () => this._updateLiveTelemetry());
         this._volHandler = this._monitor.connect('volume-changed', () => this._refreshAudio());
         this.connect('map', () => this._updateLiveTelemetry());
+        this.connect('destroy', () => {
+            if (this._chargeLimitUnsub) {
+                this._chargeLimitUnsub();
+                this._chargeLimitUnsub = null;
+            }
+        });
     }
 
     get available() {
@@ -170,11 +184,12 @@ export const DevicesPage = GObject.registerClass({
             valign: Gtk.Align.CENTER,
             css_classes: ['isle-device-card', 'isle-device-top-card'],
         });
-        const batTile = new Gtk.Box({
-            orientation: Gtk.Orientation.VERTICAL,
-            css_classes: ['isle-device-tile'],
+        this._batteryCapBtn = new Gtk.Button({
+            css_classes: ['isle-battery-cap-btn'],
             valign: Gtk.Align.CENTER,
             halign: Gtk.Align.CENTER,
+            focus_on_click: false,
+            accessible_role: Gtk.AccessibleRole.TOGGLE_BUTTON,
         });
         this._batteryIcon = new Gtk.Image({
             gicon: icon('isle-battery-symbolic'),
@@ -183,7 +198,8 @@ export const DevicesPage = GObject.registerClass({
             valign: Gtk.Align.CENTER,
             halign: Gtk.Align.CENTER,
         });
-        batTile.append(this._batteryIcon);
+        this._batteryCapBtn.set_child(this._batteryIcon);
+        this._batteryCapBtn.connect('clicked', () => this._toggleChargeLimit());
         const batteryTexts = new Gtk.Box({
             orientation: Gtk.Orientation.VERTICAL,
             spacing: 2,
@@ -197,7 +213,7 @@ export const DevicesPage = GObject.registerClass({
         this._batteryStatusLbl.set_ellipsize(Pango.EllipsizeMode.END);
         batteryTexts.append(this._batteryPercentLbl);
         batteryTexts.append(this._batteryStatusLbl);
-        this._batteryCard.append(batTile);
+        this._batteryCard.append(this._batteryCapBtn);
         this._batteryCard.append(batteryTexts);
         this._telemetryRow.append(this._batteryCard);
 
@@ -536,22 +552,76 @@ export const DevicesPage = GObject.registerClass({
         runCommandAsync(['wpctl', 'set-mute', '@DEFAULT_AUDIO_SOURCE@', 'toggle']);
     }
 
+    _readBatterySysStatus() {
+        try {
+            const [ok, data] = GLib.file_get_contents('/sys/class/power_supply/BAT0/status');
+            return ok ? new TextDecoder().decode(data).trim() : '';
+        } catch (_) {
+            return '';
+        }
+    }
+
+    _toggleChargeLimit() {
+        if (!globalThis.isleGetChargeLimit || !globalThis.isleSetChargeLimit) return;
+        const cur = globalThis.isleGetChargeLimit();
+        globalThis.isleSetChargeLimit({ enabled: !cur.enabled });
+    }
+
+    _syncBatteryCapUi() {
+        if (!this._batteryCapBtn) return;
+        const cap = globalThis.isleGetChargeLimit
+            ? globalThis.isleGetChargeLimit()
+            : { enabled: false, percent: 70 };
+        if (cap.enabled) {
+            this._batteryCapBtn.add_css_class('cap-active');
+            this._batteryCapBtn.set_tooltip_text(`Charge limit ON (${cap.percent}%) — click to disable`);
+        } else {
+            this._batteryCapBtn.remove_css_class('cap-active');
+            this._batteryCapBtn.set_tooltip_text(`Charge limit OFF — click to cap at ${cap.percent}%`);
+        }
+    }
+
     _syncTopCards() {
         const sys = this.daemon?.state?.system ?? {};
+        const cap = globalThis.isleGetChargeLimit
+            ? globalThis.isleGetChargeLimit()
+            : { enabled: false, percent: 70 };
+        const sysBatStatus = this._readBatterySysStatus();
 
         // 1. Battery Card
         const batInfo = getBatteryTelemetry(sys.battery);
         if (batInfo) {
-            const stateStr = batInfo.isCharging ? 'Charging' : (batInfo.isPlugged ? 'Plugged in' : 'On Battery');
+            const isHolding = cap.enabled && batInfo.isPlugged && !batInfo.isCharging
+                && (sysBatStatus === 'Not charging' || batInfo.percent >= cap.percent);
+            const stateStr = batInfo.isCharging
+                ? 'Charging'
+                : (batInfo.isPlugged ? (isHolding ? 'Holding' : 'Plugged in') : 'On Battery');
             this._batteryPercentLbl.set_text(`${batInfo.percent}% · ${stateStr}`);
-            this._batteryStatusLbl.set_text(batInfo.timeStr || (batInfo.isPlugged ? 'AC Connected' : 'Discharging'));
+            if (isHolding) {
+                this._batteryStatusLbl.set_text(`Capped at ${cap.percent}%`);
+            } else if (cap.enabled) {
+                const shortTime = batInfo.timeStr ? batInfo.timeStr.replace(/\s*(remaining|to full)$/, '') : '';
+                this._batteryStatusLbl.set_text(
+                    shortTime ? `${shortTime} · Cap ${cap.percent}%` : `Cap ${cap.percent}%`
+                );
+            } else {
+                this._batteryStatusLbl.set_text(batInfo.timeStr || (batInfo.isPlugged ? 'AC Connected' : 'Discharging'));
+            }
             const iconName = batInfo.percent <= 20 ? 'isle-battery-low-symbolic' : 'isle-battery-symbolic';
             this._batteryIcon.set_from_gicon(icon(iconName));
         } else if (sys.battery) {
             const pct = Math.round(sys.battery.percent || 0);
-            const stateStr = sys.battery.charging ? 'Charging' : (sys.battery.plugged ? 'Plugged in' : 'On Battery');
+            const isPlugged = Boolean(sys.battery.plugged);
+            const isCharging = Boolean(sys.battery.charging);
+            const isHolding = cap.enabled && isPlugged && !isCharging
+                && (sysBatStatus === 'Not charging' || pct >= cap.percent);
+            const stateStr = isCharging
+                ? 'Charging'
+                : (isPlugged ? (isHolding ? 'Holding' : 'Plugged in') : 'On Battery');
             this._batteryPercentLbl.set_text(`${pct}% · ${stateStr}`);
-            this._batteryStatusLbl.set_text('Battery');
+            this._batteryStatusLbl.set_text(
+                isHolding ? `Capped at ${cap.percent}%` : (cap.enabled ? `Cap ${cap.percent}%` : 'Battery')
+            );
             const iconName = pct <= 20 ? 'isle-battery-low-symbolic' : 'isle-battery-symbolic';
             this._batteryIcon.set_from_gicon(icon(iconName));
         }
