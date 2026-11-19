@@ -87,7 +87,7 @@ export const TimerPage = GObject.registerClass({
     }
 
     getDesiredHeight() {
-        return 210;
+        return 245;
     }
 
     _buildUi() {

@@ -198,6 +198,7 @@ const INTERFACES = {
             <method name="NewChat"/>
             <method name="UndoNewChat"/>
             <method name="ClearChat"/>
+            <method name="Speaking"><arg type="b" direction="out"/></method>
             <signal name="Level"><arg name="level" type="d"/></signal>
             <signal name="Notice"><arg name="text" type="s"/><arg name="ok" type="b"/></signal>
             <signal name="ModelSwitched"><arg name="provider" type="s"/><arg name="plan" type="s"/><arg name="picked" type="s"/><arg name="used" type="s"/></signal>

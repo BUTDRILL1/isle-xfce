@@ -91,7 +91,7 @@ export const CalendarPage = GObject.registerClass({
     }
 
     getDesiredHeight() {
-        return this._viewMode === 'week' ? 165 : 275;
+        return this._viewMode === 'week' ? 165 : 295;
     }
 
     _buildUi() {

@@ -97,13 +97,16 @@ export const Face = GObject.registerClass({
             vexpand: false,
             css_classes: ['isle-voice-orb'],
         });
-        this.set_content_width(FACE_SIZE);
-        this.set_content_height(FACE_SIZE);
+        const faceSize = look.size || FACE_SIZE;
+        this._faceSize = faceSize;
+        this.set_content_width(faceSize);
+        this.set_content_height(faceSize);
 
         this.bot = new Bot(look);
         this.level = 0;
         this._pointerAt = -POINTER_REST_S;
         this._look = { x: 0, y: 0 };
+        this._speakingActive = false;
 
         this.set_draw_func((area, cr, width, height) => {
             const size = Math.min(width, height);
@@ -113,12 +116,24 @@ export const Face = GObject.registerClass({
         // Frame animation clock (approx 60 fps)
         this._startTime = GLib.get_monotonic_time();
         this._tickId = this.add_tick_callback(() => {
+            if (!this.get_mapped()) {
+                return GLib.SOURCE_CONTINUE;
+            }
             const now = GLib.get_monotonic_time();
             const timeSec = (now - this._startTime) / 1000000.0;
-            this.bot.step(timeSec, this._look, this.level);
+            let activeLevel = this.level;
+            if (this._speakingActive) {
+                const cadence = 0.45 + 0.35 * Math.sin(timeSec * 17.5) + 0.2 * Math.cos(timeSec * 39.0);
+                activeLevel = Math.max(0.18, Math.min(1.0, cadence));
+            }
+            this.bot.step(timeSec, this._look, activeLevel);
             this.queue_draw();
             return GLib.SOURCE_CONTINUE;
         });
+    }
+
+    setSpeaking(active) {
+        this._speakingActive = Boolean(active);
     }
 
     setPointerTarget(px, py) {

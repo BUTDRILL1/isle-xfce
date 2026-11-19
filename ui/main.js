@@ -15,6 +15,7 @@ import { ExpandedView } from './expanded.js';
 import { LightningOverlay } from './lightning.js';
 import { Page } from './page.js';
 import { NotificationCenter } from './notifications.js';
+import { TalkbackView } from './talkback.js';
 import { AppsPage } from './pages/apps.js';
 import { CalendarPage } from './pages/calendar.js';
 import { DevicesPage } from './pages/devices.js';
@@ -220,22 +221,44 @@ export function init() {
         }
     };
 
+    const talkbackView = new TalkbackView(daemon);
+    talkbackView.set_visible(false);
+    talkbackView.set_opacity(0.0);
+
     const lightningOverlay = new LightningOverlay();
     overlay.add_overlay(lightningOverlay);
     overlay.add_overlay(compactView);
     overlay.add_overlay(expandedView);
+    overlay.add_overlay(talkbackView);
 
     let lastExpanded = null;
     let lastHeight = -1;
+    let talkbackVisualActive = false;
+
+    talkbackView.connect('close-requested', () => {
+        win.remove_css_class('isle-mode-talkback');
+        lastHeight = -1;
+        syncMorphProgress(win.get_height());
+    });
+
     const syncMorphProgress = (height) => {
         if (height === lastHeight) return;
         lastHeight = height;
 
-        // Smoothly fade out compactView from height 38..85, then fade in expandedView from 85..220
+        const isTalkback = win.has_css_class('isle-mode-talkback');
+        if (isTalkback) {
+            talkbackVisualActive = true;
+        } else if (height <= 42) {
+            talkbackVisualActive = false;
+        }
+
+        // Smoothly fade out compactView from height 38..85, then fade in active view (Talkback 240x240 or Expanded)
         if (height <= 85) {
             const compactAlpha = Math.max(0, Math.min(1, 1 - (height - 38) / 47));
             expandedView.set_visible(false);
             expandedView.set_opacity(0.0);
+            talkbackView.set_visible(false);
+            talkbackView.set_opacity(0.0);
             compactView.set_visible(true);
             compactView.set_opacity(compactAlpha);
             if (lastExpanded !== false) {
@@ -243,10 +266,25 @@ export function init() {
                 lightningOverlay.setExpanded(false);
                 expandedView.setActive(false);
             }
+        } else if (talkbackVisualActive) {
+            const tbAlpha = Math.max(0, Math.min(1, (height - 85) / 115));
+            compactView.set_visible(false);
+            compactView.set_opacity(0.0);
+            expandedView.set_visible(false);
+            expandedView.set_opacity(0.0);
+            talkbackView.set_visible(true);
+            talkbackView.set_opacity(tbAlpha);
+            if (lastExpanded !== true) {
+                lastExpanded = true;
+                lightningOverlay.setExpanded(true);
+                expandedView.setActive(false);
+            }
         } else {
             const expAlpha = Math.max(0, Math.min(1, (height - 85) / 135));
             compactView.set_visible(false);
             compactView.set_opacity(0.0);
+            talkbackView.set_visible(false);
+            talkbackView.set_opacity(0.0);
             expandedView.set_visible(true);
             expandedView.set_opacity(expAlpha);
             if (lastExpanded !== true) {
@@ -258,6 +296,7 @@ export function init() {
     };
 
     const updateVisibility = (isExpanded) => {
+        lastHeight = -1;
         syncMorphProgress(isExpanded ? 300 : 38);
     };
 
@@ -273,6 +312,8 @@ export function init() {
                     const tabName = new TextDecoder().decode(contents).trim();
                     f.delete(null);
                     print(`[Isle GJS IPC] Switching to requested tab: ${tabName}`);
+                    talkbackVisualActive = false;
+                    win.remove_css_class('isle-mode-talkback');
                     win.add_css_class('isle-force-expand');
                     updateVisibility(true);
                     if (tabName === 'settings') {
@@ -291,17 +332,30 @@ export function init() {
                     fAsst.delete(null);
                     print(`[Isle GJS IPC] Assistant command: ${cmd}`);
                     if (cmd === 'open') {
+                        talkbackVisualActive = false;
+                        win.remove_css_class('isle-mode-talkback');
                         expandedView.toggleAssistant(true);
                         updateVisibility(true);
                     } else if (cmd === 'toggle') {
-                        if (expandedView.isAssistantOpen) {
-                            expandedView.toggleAssistant(false);
+                        if (win.has_css_class('isle-mode-talkback') || talkbackView.isOpen) {
+                            talkbackView.close();
                         } else {
-                            expandedView.toggleAssistant(true);
-                            updateVisibility(true);
+                            if (expandedView.isAssistantOpen) {
+                                expandedView.toggleAssistant(false);
+                            }
+                            win.remove_css_class('isle-force-expand');
+                            win.remove_css_class('isle-mode-assistant');
+                            talkbackVisualActive = true;
+                            win.add_css_class('isle-mode-talkback');
+                            talkbackView.open();
+                            syncMorphProgress(Math.max(win.get_height(), 90));
                         }
                     } else if (cmd === 'close') {
-                        expandedView.toggleAssistant(false);
+                        if (win.has_css_class('isle-mode-talkback') || talkbackView.isOpen) {
+                            talkbackView.close();
+                        } else {
+                            expandedView.toggleAssistant(false);
+                        }
                     } else if (cmd.startsWith('ask:')) {
                         expandedView.toggleAssistant(true);
                         updateVisibility(true);
@@ -407,6 +461,13 @@ export function init() {
     keyController.connect('key-pressed', (controller, keyval, keycode, state) => {
         const ctrl = (state & Gdk.ModifierType.CONTROL_MASK) !== 0;
         const shift = (state & Gdk.ModifierType.SHIFT_MASK) !== 0;
+
+        if (win.has_css_class('isle-mode-talkback') || talkbackView.isOpen) {
+            if (keyval === Gdk.KEY_Escape) {
+                talkbackView.close();
+                return true;
+            }
+        }
 
         // When Assistant is open, let Gtk.Entry receive all normal keyboard input
         // and handle Escape to close Assistant.

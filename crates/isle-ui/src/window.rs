@@ -41,6 +41,11 @@ pub const STANDARD_EXPANDED_HEIGHT: f64 = 300.0;
 pub const ASSISTANT_EXPANDED_WIDTH: f64 = 640.0;
 pub const ASSISTANT_EXPANDED_HEIGHT: f64 = 380.0;
 
+/// Square Live Talkback proportions (240 × 240 px, vertical drop preserving notch width):
+pub const TALKBACK_WIDTH: f64 = 240.0;
+pub const TALKBACK_HEIGHT: f64 = 240.0;
+pub const TALKBACK_RADIUS: f64 = 28.0;
+
 #[allow(dead_code)]
 pub const EXPANDED_WIDTH: f64 = STANDARD_EXPANDED_WIDTH;
 #[allow(dead_code)]
@@ -337,7 +342,9 @@ impl FloatingWindow {
                 );
 
                 if !contains && !is_hovered {
-                    if is_expanded {
+                    if inner.window.has_css_class("isle-mode-talkback") {
+                        info!("[POINTER] Suppressed collapse: talkback mode active on pointer leave");
+                    } else if is_expanded {
                         info!("[POINTER] Pointer confirmed outside window; triggering collapse to COMPACT");
                         let floating = FloatingWindow(inner);
                         floating.set_expanded(false, "hover-leave");
@@ -425,16 +432,22 @@ impl FloatingWindow {
         floating.0.window.connect_css_classes_notify(move |win| {
             if let Some(inner) = weak_css.upgrade() {
                 let is_asst = win.has_css_class("isle-mode-assistant");
+                let is_talkback = win.has_css_class("isle-mode-talkback");
                 let is_force = win.has_css_class("isle-force-expand");
                 info!(
-                    "[MODE] Window css-classes changed: isle-mode-assistant={is_asst}, isle-force-expand={is_force}"
+                    "[MODE] Window css-classes changed: isle-mode-assistant={is_asst}, isle-mode-talkback={is_talkback}, isle-force-expand={is_force}"
                 );
                 let floating = FloatingWindow(inner);
-                if is_asst && !floating.0.is_expanded.get() {
-                    floating.set_expanded(true, "assistant-hotkey");
-                } else if is_force && !floating.0.is_expanded.get() {
-                    floating.set_expanded(true, "force-expand");
-                } else if !is_asst && !is_force && !floating.0.is_hovered.get() && floating.0.is_expanded.get() {
+                if (is_asst || is_talkback || is_force) && !floating.0.is_expanded.get() {
+                    let reason = if is_talkback {
+                        "talkback-hotkey"
+                    } else if is_asst {
+                        "assistant-hotkey"
+                    } else {
+                        "force-expand"
+                    };
+                    floating.set_expanded(true, reason);
+                } else if !is_asst && !is_talkback && !is_force && !floating.0.is_hovered.get() && floating.0.is_expanded.get() {
                     floating.set_expanded(false, "mode-close");
                 } else {
                     floating.update_target_geometry("css-classes-changed");
@@ -491,6 +504,7 @@ impl FloatingWindow {
             }
         } else {
             self.0.window.remove_css_class("isle-force-expand");
+            self.0.window.remove_css_class("isle-mode-talkback");
             // Restore previous X11 focus window when collapsing
             let prev = self.0.previous_focus.take();
             let _ = self.0.x11.restore_focus(prev);
@@ -504,6 +518,7 @@ impl FloatingWindow {
     pub fn update_target_geometry(&self, reason: &str) {
         let is_expanded = self.0.is_expanded.get();
         let is_asst = self.0.window.has_css_class("isle-mode-assistant");
+        let is_talkback = self.0.window.has_css_class("isle-mode-talkback");
         let (cur_w, cur_h, _, _) = self.current_geometry();
 
         let (target_w, target_h, target_r, target_sh) = if self.0.window.has_css_class("isle-mode-alarm-alert") {
@@ -520,6 +535,13 @@ impl FloatingWindow {
                     ASSISTANT_EXPANDED_HEIGHT,
                     EXPANDED_RADIUS,
                     EXPANDED_SHOULDER,
+                )
+            } else if is_talkback {
+                (
+                    TALKBACK_WIDTH,
+                    TALKBACK_HEIGHT,
+                    TALKBACK_RADIUS,
+                    COMPACT_SHOULDER,
                 )
             } else {
                 (
@@ -593,9 +615,18 @@ impl FloatingWindow {
             let is_expanded = inner.is_expanded.get();
             if is_expanded {
                 let is_asst = inner.window.has_css_class("isle-mode-assistant");
-                let target_w = if is_asst { ASSISTANT_EXPANDED_WIDTH } else { STANDARD_EXPANDED_WIDTH };
+                let is_talkback = inner.window.has_css_class("isle-mode-talkback");
+                let target_w = if is_asst {
+                    ASSISTANT_EXPANDED_WIDTH
+                } else if is_talkback {
+                    TALKBACK_WIDTH
+                } else {
+                    STANDARD_EXPANDED_WIDTH
+                };
                 let target_h = if is_asst {
                     ASSISTANT_EXPANDED_HEIGHT
+                } else if is_talkback {
+                    TALKBACK_HEIGHT
                 } else {
                     Self::custom_expanded_height(&inner.window)
                 };
@@ -625,6 +656,8 @@ impl FloatingWindow {
                 let target_str = if inner.is_expanded.get() {
                     if inner.window.has_css_class("isle-mode-assistant") {
                         format!("ASSISTANT_EXPANDED ({:.0}x{:.0})", ASSISTANT_EXPANDED_WIDTH, ASSISTANT_EXPANDED_HEIGHT)
+                    } else if inner.window.has_css_class("isle-mode-talkback") {
+                        format!("TALKBACK_EXPANDED ({:.0}x{:.0})", TALKBACK_WIDTH, TALKBACK_HEIGHT)
                     } else {
                         format!("EXPANDED ({:.0}x{:.0})", STANDARD_EXPANDED_WIDTH, Self::custom_expanded_height(&inner.window))
                     }

@@ -65,18 +65,23 @@ export const LightningOverlay = GObject.registerClass({
         const next = Boolean(expanded);
         if (this._expanded === next) return;
         this._expanded = next;
+        if (this._active && this._timerId) {
+            GLib.source_remove(this._timerId);
+            this._timerId = 0;
+        }
         this.refresh();
     }
 
     refresh() {
-        const shouldRun = this._expanded && isAcPluggedIn() && getPowerProfile() === 'lightning';
-        if (shouldRun === this._active) return;
+        const shouldRun = isAcPluggedIn() && getPowerProfile() === 'lightning';
+        if (shouldRun === this._active && (!shouldRun || this._timerId)) return;
         this._active = shouldRun;
 
         if (shouldRun) {
             this.set_visible(true);
             if (!this._timerId) {
-                this._timerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 33, () => {
+                const intervalMs = this._expanded ? 33 : 66;
+                this._timerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, intervalMs, () => {
                     if (!this._active) {
                         this._timerId = 0;
                         return GLib.SOURCE_REMOVE;

@@ -429,7 +429,13 @@ impl AssistantService {
         #[zbus(header)] header: Header<'_>,
     ) -> fdo::Result<()> {
         crate::caller::shell_only(connection, &header).await?;
+        speak::stop();
         self.send(Command::Stop)
+    }
+
+    /// Returns whether assistant is currently speaking.
+    async fn speaking(&self) -> bool {
+        speak::is_speaking()
     }
 
     /// The island closed: listening stops, and the AI and the speech model quit. A request being answered

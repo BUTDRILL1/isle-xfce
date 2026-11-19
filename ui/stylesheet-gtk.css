@@ -454,9 +454,9 @@ button.isle-button, button.isle-pill, button.isle-tab, button.isle-corner-close 
 
 /* What shows lines up with the pages' 20px edges: the open tab's pill on the left, the settings icon on the right. */
 .isle-header {
-  padding: 6px 14px 0 16px;
+  padding: 6px 12px 0 12px;
   margin-top: 4px;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 .isle-header-clock { }
 
@@ -464,7 +464,7 @@ button.isle-button, button.isle-pill, button.isle-tab, button.isle-corner-close 
 .isle-tabs { }
 
 .isle-tab {
-  padding: 4px 7px;
+  padding: 4px 5px;
   border-radius: 999px;
   color: #ffffff;
   transition-duration: 150ms;
@@ -487,8 +487,8 @@ button.isle-button, button.isle-pill, button.isle-tab, button.isle-corner-close 
   border-radius: 3px;
   background-color: #ff453a;
 }
-.isle-header-date { font-size: 13px; color: rgba(255, 255, 255, 0.9); }
-.isle-header-time { font-size: 13px; font-weight: 600; }
+.isle-header-date { font-size: 12px; color: rgba(255, 255, 255, 0.9); }
+.isle-header-time { font-size: 12px; font-weight: 600; }
 .isle-header-time-box { }
 .isle-header-meridiem { font-size: 10.4px; font-weight: 600; color: rgba(255, 255, 255, 0.72); }
 .isle-header-settings { padding: 4px; color: rgba(255, 255, 255, 0.6); }
@@ -2066,4 +2066,19 @@ button.isle-airplane-btn.active {
 .isle-header-settings.active {
   opacity: 1.0;
   color: #0a84ff;
+}
+
+/* ── Live Talkback Square Mode (240x240) ── */
+.isle-talkback-view {
+  padding: 16px 14px 14px 14px;
+}
+.isle-talkback-face {
+  min-width: 136px;
+  min-height: 136px;
+}
+.isle-talkback-status {
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.78);
+  letter-spacing: -0.1px;
 }

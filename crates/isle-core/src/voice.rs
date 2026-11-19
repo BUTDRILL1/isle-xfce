@@ -124,13 +124,18 @@ impl Endpointer {
     }
 }
 
-/// RMS level (0..1) of 16-bit samples.
+/// RMS level (0..1) of 16-bit samples, with DC offset removed for PDM microphones.
 pub fn rms(samples: &[i16]) -> f32 {
     if samples.is_empty() {
         return 0.0;
     }
-    let sum: f64 = samples.iter().map(|&s| (s as f64 / 32768.0).powi(2)).sum();
-    (sum / samples.len() as f64).sqrt() as f32
+    let n = samples.len() as f64;
+    let mean: f64 = samples.iter().map(|&s| s as f64 / 32768.0).sum::<f64>() / n;
+    let sum: f64 = samples
+        .iter()
+        .map(|&s| (s as f64 / 32768.0 - mean).powi(2))
+        .sum();
+    (sum / n).sqrt() as f32
 }
 
 /// A level for meters: RMS mapped from -50..-10 dBFS onto 0..1.

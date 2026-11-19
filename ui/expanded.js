@@ -42,7 +42,7 @@ const SLIDE_DURATION = 260;
 export const TABS = {
     call: { icon: 'isle-phone', label: 'Call' },
     music: { icon: 'isle-music', label: 'Music' },
-    notifications: { icon: 'isle-bell', label: 'Notifications' },
+    notifications: { icon: 'isle-bell', label: 'Alerts' },
     focus: { icon: 'isle-timer', label: 'Timer' },
     reminders: { icon: 'isle-tasks', label: 'Reminders' },
     shelf: { icon: 'isle-shelf', label: 'Shelf' },

@@ -80,8 +80,54 @@ pub fn stop() {
     }
 }
 
+/// Checks if speech is currently active (Piper or paplay is still running).
+pub fn is_speaking() -> bool {
+    if let Ok(mut state) = STATE.lock() {
+        if let Some(ref mut proc) = state.process {
+            let piper_alive = matches!(proc.piper.try_wait(), Ok(None));
+            let paplay_alive = matches!(proc.paplay.try_wait(), Ok(None));
+            if piper_alive || paplay_alive {
+                true
+            } else {
+                state.process = None;
+                false
+            }
+        } else {
+            false
+        }
+    } else {
+        false
+    }
+}
+
+/// Truncates text before any trailing JSON object or ```json fence so TTS never speaks JSON.
+pub fn strip_json_blocks(text: &str) -> &str {
+    let mut cut = text.len();
+    if let Some(fence_idx) = text.find("```json") {
+        cut = cut.min(fence_idx);
+    }
+    let bytes = text.as_bytes();
+    for i in 0..cut {
+        if bytes[i] == b'{' {
+            let rest = text[i + 1..cut].trim_start();
+            if rest.starts_with("\"actions\"")
+                || rest.starts_with("\"done\"")
+                || rest.starts_with("\"say\"")
+                || rest.starts_with("\"listen\"")
+                || rest.starts_with('}')
+                || rest.is_empty()
+            {
+                cut = cut.min(i);
+                break;
+            }
+        }
+    }
+    text[..cut].trim_end()
+}
+
 /// Clean markdown, code blocks, URLs, and formatting characters before speaking.
 pub fn clean_text(text: &str) -> String {
+    let text = strip_json_blocks(text);
     let mut cleaned = String::with_capacity(text.len());
     let mut in_code_block = false;
 
@@ -96,8 +142,8 @@ pub fn clean_text(text: &str) -> String {
         }
 
         let mut in_inline_code = false;
-        let mut chars = line.chars().peekable();
-        while let Some(c) = chars.next() {
+        let chars = line.chars();
+        for c in chars {
             if c == '`' {
                 in_inline_code = !in_inline_code;
                 continue;
@@ -105,7 +151,7 @@ pub fn clean_text(text: &str) -> String {
             if in_inline_code {
                 continue;
             }
-            if c == '*' || c == '_' || c == '#' || c == '>' {
+            if matches!(c, '*' | '_' | '#' | '>' | '{' | '}' | '[' | ']' | '"') {
                 continue;
             }
             cleaned.push(c);
@@ -225,6 +271,7 @@ pub fn stream(say_so_far: &str) {
     if !installed() || muted() {
         return;
     }
+    let say_so_far = strip_json_blocks(say_so_far);
 
     let mut state = match STATE.lock() {
         Ok(s) => s,
@@ -259,6 +306,7 @@ pub fn finish(say: &str) {
     if !installed() || muted() {
         return;
     }
+    let say = strip_json_blocks(say);
 
     let mut state = match STATE.lock() {
         Ok(s) => s,

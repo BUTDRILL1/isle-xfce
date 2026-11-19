@@ -69,7 +69,7 @@ fn yes() -> bool {
     true
 }
 
-/// The answer in `text`: its JSON, also inside a ```json fence, else the text as said, without actions.
+/// The answer in `text`: its JSON, also inside a ```json fence, prose + trailing JSON, else the text as said.
 pub fn from_text(text: &str) -> Answer {
     let text = text.trim();
     let inner = text
@@ -77,10 +77,79 @@ pub fn from_text(text: &str) -> Answer {
         .or_else(|| text.strip_prefix("```"))
         .and_then(|rest| rest.trim_end().strip_suffix("```"))
         .map_or(text, str::trim);
-    let mut answer: Answer = serde_json::from_str(inner).unwrap_or_else(|_| Answer::plain(text));
+    let mut answer: Answer = match serde_json::from_str(inner) {
+        Ok(ans) => ans,
+        Err(_) => extract_prose_and_json(text).unwrap_or_else(|| Answer::plain(text)),
+    };
     answer.actions.iter_mut().for_each(window_focus);
     answer.actions.iter_mut().for_each(line_in_text);
     answer
+}
+
+fn extract_prose_and_json(text: &str) -> Option<Answer> {
+    if let Some(fence_pos) = text.rfind("```json").or_else(|| text.rfind("```")) {
+        let prose = text[..fence_pos].trim();
+        let after = text[fence_pos..].trim_start_matches("```json").trim_start_matches("```");
+        let json_part = after.trim_end().strip_suffix("```").unwrap_or(after).trim();
+        if let Ok(mut parsed) = serde_json::from_str::<Value>(json_part) {
+            return build_hybrid_answer(prose, &mut parsed);
+        }
+    }
+    if text.ends_with('}') {
+        for (i, ch) in text.char_indices() {
+            if ch == '{' {
+                let candidate = &text[i..];
+                if let Ok(mut parsed) = serde_json::from_str::<Value>(candidate) {
+                    if parsed.is_object()
+                        && (parsed.get("done").is_some()
+                            || parsed.get("actions").is_some()
+                            || parsed.get("say").is_some())
+                    {
+                        let prose = text[..i].trim();
+                        return build_hybrid_answer(prose, &mut parsed);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn build_hybrid_answer(prose: &str, parsed: &mut Value) -> Option<Answer> {
+    let say_from_json = parsed
+        .get("say")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_owned();
+    let say = if !prose.is_empty() {
+        prose.to_owned()
+    } else {
+        say_from_json
+    };
+    let actions = parsed
+        .get_mut("actions")
+        .and_then(Value::as_array_mut)
+        .map(std::mem::take)
+        .unwrap_or_default();
+    let listen = parsed
+        .get("listen")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let done = parsed
+        .get("done")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    Some(Answer {
+        say,
+        actions,
+        listen,
+        done,
+        tools: Vec::new(),
+        checks: Vec::new(),
+        checked: false,
+        ran: Vec::new(),
+    })
 }
 
 /// A `focus` naming an app or window means switching to it, not the focus timer (Codex mixes the two up).
