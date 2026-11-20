@@ -13,6 +13,8 @@ import Gtk from 'gi://Gtk?version=4.0';
 import Pango from 'gi://Pango';
 
 import { Face } from './assistant.js';
+import { paletteFor } from './bot.js';
+import { getSettingsStore } from './settingsStore.js';
 import { icon, iconButton } from './widgets.js';
 
 export const TalkbackView = GObject.registerClass({
@@ -37,9 +39,16 @@ export const TalkbackView = GObject.registerClass({
         this._startTurn = 0;
         this._speakPollId = 0;
         this._autoCloseId = 0;
+        this._settingsStore = getSettingsStore();
+
+        const getLook = () => {
+            const b = this._settingsStore.get().bot;
+            const color = b.colorMode === 'fixed' ? b.color : 'cloud';
+            return { shape: b.shape, palette: paletteFor(color, b.glow), size: 136 };
+        };
 
         // 1. Centered 136x136 Face
-        this._face = new Face({ shape: 'circle', size: 136 });
+        this._face = new Face(getLook());
         this._face.set_halign(Gtk.Align.CENTER);
         this._face.set_valign(Gtk.Align.CENTER);
         this._face.add_css_class('isle-talkback-face');
@@ -73,21 +82,38 @@ export const TalkbackView = GObject.registerClass({
             halign: Gtk.Align.CENTER,
         });
 
-        const muteFlagFile = Gio.File.new_for_path(
-            GLib.build_filenamev([GLib.get_user_runtime_dir(), 'isle-speech-muted'])
-        );
-        this._isMuted = muteFlagFile.query_exists(null);
+        this._settingsStore.syncTtsMuteFlag();
+        this._isMuted = !this._settingsStore.get().assistant.ttsEnabled;
 
         this._muteBtn = iconButton(this._isMuted ? 'isle-speaker-off-symbolic' : 'isle-speaker-2-symbolic', 'isle-button-flat', () => {
-            this._isMuted = !this._isMuted;
-            if (this._isMuted) {
-                try { muteFlagFile.create(Gio.FileCreateFlags.NONE, null); } catch (_) {}
-            } else {
-                try { muteFlagFile.delete(null); } catch (_) {}
-            }
+            const nextMuted = !this._isMuted;
+            this._isMuted = nextMuted;
+            this._settingsStore.update(s => {
+                s.assistant.ttsEnabled = !nextMuted;
+            }, 'assistant');
+            this._settingsStore.syncTtsMuteFlag();
             this._muteBtn.set_child(icon(this._isMuted ? 'isle-speaker-off-symbolic' : 'isle-speaker-2-symbolic', 12));
         }, { size: 12, accessibleName: 'Toggle TTS voice output' });
         bottomRow.append(this._muteBtn);
+
+        this._settingsUnsub = this._settingsStore.subscribe(['bot', 'assistant'], (_state, topics) => {
+            if (topics.includes('*') || topics.includes('bot')) {
+                const b = this._settingsStore.get().bot;
+                const color = b.colorMode === 'fixed' ? b.color : 'cloud';
+                this._face?.setLook({ shape: b.shape, palette: paletteFor(color, b.glow) });
+            }
+            if (topics.includes('*') || topics.includes('assistant')) {
+                this._isMuted = !this._settingsStore.get().assistant.ttsEnabled;
+                this._settingsStore.syncTtsMuteFlag();
+                this._muteBtn?.set_child(icon(this._isMuted ? 'isle-speaker-off-symbolic' : 'isle-speaker-2-symbolic', 12));
+            }
+        });
+        this.connect('destroy', () => {
+            if (this._settingsUnsub) {
+                this._settingsUnsub();
+                this._settingsUnsub = null;
+            }
+        });
 
         const closeBtn = iconButton('isle-close-symbolic', 'isle-button-flat', () => {
             this.close();
@@ -119,14 +145,9 @@ export const TalkbackView = GObject.registerClass({
         this._open = true;
         this._clearTimers();
 
-        const muteFlagFile = Gio.File.new_for_path(
-            GLib.build_filenamev([GLib.get_user_runtime_dir(), 'isle-speech-muted'])
-        );
-        this._isMuted = muteFlagFile.query_exists(null);
-        if (this._isMuted) {
-            try { muteFlagFile.delete(null); this._isMuted = false; } catch (_) {}
-            this._muteBtn.set_child(icon('isle-speaker-2-symbolic', 12));
-        }
+        this._settingsStore.syncTtsMuteFlag();
+        this._isMuted = !this._settingsStore.get().assistant.ttsEnabled;
+        this._muteBtn.set_child(icon(this._isMuted ? 'isle-speaker-off-symbolic' : 'isle-speaker-2-symbolic', 12));
 
         this._face.bot.restart();
         this._face.setForm('listening');
@@ -138,10 +159,7 @@ export const TalkbackView = GObject.registerClass({
         }
 
         if (this._daemon) {
-            const context = JSON.stringify({
-                provider: 'nim',
-                nim_model: 'nvidia/nemotron-3.5-super-vl-120b-a12b',
-            });
+            const context = JSON.stringify(this._settingsStore.buildAssistantContext());
             this._daemon.call('assistant', 'Listen', context).catch(err => {
                 console.warn(`Isle: Talkback Listen D-Bus call failed: ${err.message}`);
                 this._face.setForm('confused');
@@ -226,10 +244,9 @@ export const TalkbackView = GObject.registerClass({
                                 this._autoCloseId = 0;
                                 if (this._open && this._daemon) {
                                     this._startTurn = this._daemon?.state?.assistant?.turn || 0;
-                                    this._daemon.call('assistant', 'Listen', JSON.stringify({
-                                        provider: 'nim',
-                                        nim_model: 'nvidia/nemotron-3.5-super-vl-120b-a12b',
-                                    })).catch(() => {});
+                                    this._daemon.call('assistant', 'Listen', JSON.stringify(
+                                        this._settingsStore.buildAssistantContext()
+                                    )).catch(() => {});
                                 }
                                 return GLib.SOURCE_REMOVE;
                             });

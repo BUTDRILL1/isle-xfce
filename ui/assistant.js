@@ -17,6 +17,7 @@ import Pango from 'gi://Pango';
 import { Bot, paletteFor } from './bot.js';
 import { BotIcon } from './botIcon.js';
 import { ChatView, CommandCard, label } from './chat.js';
+import { getSettingsStore } from './settingsStore.js';
 import { icon, iconButton } from './widgets.js';
 import { executeActions, stopUnit } from './actions.js';
 
@@ -183,6 +184,13 @@ export const AssistantView = GObject.registerClass({
         this._history = [];
         this._lastStep = 0;
         this._pendingDecision = null;
+        this._settingsStore = getSettingsStore();
+
+        const getLook = () => {
+            const b = this._settingsStore.get().bot;
+            const color = b.colorMode === 'fixed' ? b.color : 'cloud';
+            return { shape: b.shape, palette: paletteFor(color, b.glow) };
+        };
 
         // 1. Header Row (Fixed height): Character Face, Title / Status, New Chat, Close
         const headerRow = new Gtk.Box({
@@ -193,7 +201,7 @@ export const AssistantView = GObject.registerClass({
         });
 
         // Animated Cairo Bot Character
-        this._face = new Face({ shape: 'circle' });
+        this._face = new Face(getLook());
         this._face.set_valign(Gtk.Align.CENTER);
         const faceClick = new Gtk.GestureClick();
         faceClick.connect('released', () => this._toggleListen());
@@ -224,10 +232,8 @@ export const AssistantView = GObject.registerClass({
             valign: Gtk.Align.CENTER,
         });
 
-        const muteFlagFile = Gio.File.new_for_path(
-            GLib.build_filenamev([GLib.get_user_runtime_dir(), 'isle-speech-muted'])
-        );
-        this._isMuted = muteFlagFile.query_exists(null);
+        this._settingsStore.syncTtsMuteFlag();
+        this._isMuted = !this._settingsStore.get().assistant.ttsEnabled;
 
         const updateMuteIcon = () => {
             const iconName = this._isMuted ? 'isle-speaker-off-symbolic' : 'isle-speaker-2-symbolic';
@@ -235,15 +241,32 @@ export const AssistantView = GObject.registerClass({
         };
 
         this._muteBtn = iconButton(this._isMuted ? 'isle-speaker-off-symbolic' : 'isle-speaker-2-symbolic', 'isle-button-flat', () => {
-            this._isMuted = !this._isMuted;
-            if (this._isMuted) {
-                try { muteFlagFile.create(Gio.FileCreateFlags.NONE, null); } catch (_) {}
-            } else {
-                try { muteFlagFile.delete(null); } catch (_) {}
-            }
+            const nextMuted = !this._isMuted;
+            this._isMuted = nextMuted;
+            this._settingsStore.update(s => {
+                s.assistant.ttsEnabled = !nextMuted;
+            }, 'assistant');
+            this._settingsStore.syncTtsMuteFlag();
             updateMuteIcon();
         }, { size: 13, accessibleName: 'Toggle TTS voice output' });
         headerActions.append(this._muteBtn);
+
+        this._settingsUnsub = this._settingsStore.subscribe(['bot', 'assistant'], (_state, topics) => {
+            if (topics.includes('*') || topics.includes('bot')) {
+                this._face?.setLook(getLook());
+            }
+            if (topics.includes('*') || topics.includes('assistant')) {
+                this._isMuted = !this._settingsStore.get().assistant.ttsEnabled;
+                this._settingsStore.syncTtsMuteFlag();
+                updateMuteIcon();
+            }
+        });
+        this.connect('destroy', () => {
+            if (this._settingsUnsub) {
+                this._settingsUnsub();
+                this._settingsUnsub = null;
+            }
+        });
 
         this._newChatBtn = iconButton('isle-plus-symbolic', 'isle-button-flat', () => {
             this.clearConversation();
@@ -384,10 +407,7 @@ export const AssistantView = GObject.registerClass({
         this._ideasBox.set_visible(false);
 
         if (this._daemon) {
-            const context = JSON.stringify({
-                provider: 'nim',
-                nim_model: 'nvidia/nemotron-3.5-super-vl-120b-a12b',
-            });
+            const context = JSON.stringify(this._settingsStore.buildAssistantContext());
             this._daemon.call('assistant', 'Listen', context).catch(err => {
                 console.warn(`Isle: Assistant Listen D-Bus call failed: ${err.message}`);
                 this._face.setForm('confused');
@@ -422,10 +442,7 @@ export const AssistantView = GObject.registerClass({
         const daemonConnected = Boolean(this._daemon && this._daemon._proxies['assistant'] && this._daemon.running);
         print(`[Isle Assistant _submit] daemonConnected=${daemonConnected} running=${this._daemon?.running} proxy=${Boolean(this._daemon?._proxies?.['assistant'])}`);
         if (daemonConnected) {
-            const context = JSON.stringify({
-                provider: 'nim',
-                nim_model: 'nvidia/nemotron-3.5-super-vl-120b-a12b',
-            });
+            const context = JSON.stringify(this._settingsStore.buildAssistantContext());
             this._daemon.call('assistant', 'Ask', text, context).then(() => {
                 print('[Isle Assistant _submit] Ask call completed');
             }).catch(err => {

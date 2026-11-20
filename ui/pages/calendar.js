@@ -11,6 +11,7 @@ import Gtk from 'gi://Gtk?version=4.0';
 
 import { label, pillButton } from '../widgets.js';
 import { Page } from '../page.js';
+import { getSettingsStore } from '../settingsStore.js';
 
 const MEETING_URL_RE = /https?:\/\/(?:[a-zA-Z0-9-]+\.)?(?:meet\.google\.com|zoom\.us|teams\.microsoft\.com|webex\.com)\/[^\s"'>]+/i;
 const GENERAL_URL_RE = /https?:\/\/[^\s"'>\\]+/i;
@@ -76,9 +77,22 @@ export const CalendarPage = GObject.registerClass({
         this._update();
         this._refreshEds();
 
+        this._settingsStore = getSettingsStore();
         this._edsTimer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 60, () => {
             this._refreshEds();
             return GLib.SOURCE_CONTINUE;
+        });
+        this._calSettingsUnsub = this._settingsStore.subscribe('calendar', (state) => {
+            const targetMode = state.calendarViewMode === 'week' ? 'week' : 'month';
+            if (targetMode !== this._viewMode) {
+                this._setViewMode(targetMode, { save: false });
+            }
+        });
+        this.connect('destroy', () => {
+            if (this._calSettingsUnsub) {
+                this._calSettingsUnsub();
+                this._calSettingsUnsub = null;
+            }
         });
     }
 
@@ -187,13 +201,16 @@ export const CalendarPage = GObject.registerClass({
         this.append(this._root);
     }
 
-    _setViewMode(mode) {
+    _setViewMode(mode, { save = true } = {}) {
         if (this._viewMode === mode) return;
         this._viewMode = mode;
         this._monthModeBtn.set_css_classes(['isle-cal-mode-btn', ...(mode === 'month' ? ['active'] : [])]);
         this._weekModeBtn.set_css_classes(['isle-cal-mode-btn', ...(mode === 'week' ? ['active'] : [])]);
-        globalThis.isleCalendarViewMode = mode;
-        if (globalThis.isleSaveSettings) globalThis.isleSaveSettings();
+        if (save) {
+            this._settingsStore.update(s => {
+                s.calendarViewMode = mode;
+            }, 'calendar');
+        }
         this._update();
     }
 

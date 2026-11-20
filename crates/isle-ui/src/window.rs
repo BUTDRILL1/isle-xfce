@@ -261,7 +261,7 @@ impl FloatingWindow {
                 return;
             }
 
-            if !is_expanded {
+            if !is_expanded && !inner.window.has_css_class("isle-click-to-open") {
                 let floating = FloatingWindow(inner);
                 floating.set_expanded(true, "pointer-enter");
             }
@@ -290,12 +290,12 @@ impl FloatingWindow {
                         "[POINTER] Pointer moved {dist:.1}px on screen away from manual collapse anchor; clearing anchor"
                     );
                     inner.manual_collapse_screen_pos.set(None);
-                    if !inner.is_expanded.get() && sy <= COMPACT_HEIGHT {
+                    if !inner.is_expanded.get() && sy <= COMPACT_HEIGHT && !inner.window.has_css_class("isle-click-to-open") {
                         let floating = FloatingWindow(inner);
                         floating.set_expanded(true, "pointer-motion-after-anchor-cleared");
                     }
                 }
-            } else if !inner.is_expanded.get() && (!inner.animating.get() || sy <= COMPACT_HEIGHT) {
+            } else if !inner.is_expanded.get() && (!inner.animating.get() || sy <= COMPACT_HEIGHT) && !inner.window.has_css_class("isle-click-to-open") {
                 let floating = FloatingWindow(inner);
                 floating.set_expanded(true, "pointer-motion");
             }

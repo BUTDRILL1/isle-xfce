@@ -98,9 +98,11 @@ export const ExpandedView = GObject.registerClass({
         this._call = call || { active: false };
         this._settings = settings || {};
         this._pages = pages || [];
+        this._hiddenTabs = new Set();
+        this._showHeaderBars = true;
 
-        // Select the first available page (default: music)
-        this._index = Math.max(0, this._pages.findIndex(p => p.available));
+        // Select the first visible page (default: music)
+        this._index = Math.max(0, this._pages.findIndex(p => this._isPageVisible(p)));
         this._active = false;
         this._width = EXPANDED_WIDTH;
         this._lastFlip = 0;
@@ -418,18 +420,18 @@ export const ExpandedView = GObject.registerClass({
 
             tab.connect('clicked', () => {
                 clearHoverTimer();
-                this.showPage(index);
+                this.showPage(page.name);
             });
 
             const motion = new Gtk.EventControllerMotion();
             motion.connect('enter', () => {
-                if (index !== this._index || this._assistantActive || this._settingsActive) {
+                if (this.page !== page || this._assistantActive || this._settingsActive) {
                     tabIcon.set_opacity(TAB_OPACITY.hover);
                     if (isHoverSwitchEnabled()) {
                         clearHoverTimer();
                         hoverTimerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, getHoverDwellMs(), () => {
                             hoverTimerId = 0;
-                            this.showPage(index);
+                            this.showPage(page.name);
                             return GLib.SOURCE_REMOVE;
                         });
                     }
@@ -437,7 +439,7 @@ export const ExpandedView = GObject.registerClass({
             });
             motion.connect('leave', () => {
                 clearHoverTimer();
-                if (index !== this._index || this._assistantActive || this._settingsActive) {
+                if (this.page !== page || this._assistantActive || this._settingsActive) {
                     tabIcon.set_opacity(TAB_OPACITY.idle);
                 }
             });
@@ -714,7 +716,7 @@ export const ExpandedView = GObject.registerClass({
             ? this._pages.findIndex(p => p.name === target)
             : target;
 
-        if (index < 0 || index >= this._pages.length || index === this._index || !this._pages[index]?.available) {
+        if (index < 0 || index >= this._pages.length || index === this._index || !this._isPageVisible(this._pages[index])) {
             return;
         }
 
@@ -760,7 +762,7 @@ export const ExpandedView = GObject.registerClass({
 
     showTab(n) {
         const available = this._pages
-            .map((page, i) => page.available ? i : -1)
+            .map((page, i) => this._isPageVisible(page) ? i : -1)
             .filter(i => i >= 0);
         const index = available[n - 1];
         if (index !== undefined) {
@@ -768,9 +770,71 @@ export const ExpandedView = GObject.registerClass({
         }
     }
 
+    _isPageVisible(page) {
+        if (!page || !page.available) return false;
+        if (page.name === 'call') return true;
+        return !this._hiddenTabs.has(page.name);
+    }
+
+    applyTabConfig({ hidden = [], order = [] } = {}) {
+        const current = this.page;
+        this._hiddenTabs = new Set(Array.isArray(hidden) ? hidden : []);
+
+        if (Array.isArray(order) && order.length > 0) {
+            const rank = new Map();
+            rank.set('call', -1);
+            order.forEach((id, i) => {
+                if (!rank.has(id)) rank.set(id, i);
+            });
+            const sortFn = (aPage, bPage) => {
+                const ra = rank.has(aPage.name) ? rank.get(aPage.name) : 999;
+                const rb = rank.has(bPage.name) ? rank.get(bPage.name) : 999;
+                return ra - rb;
+            };
+            this._pages.sort(sortFn);
+            this._tabs.sort((a, b) => sortFn(a.page, b.page));
+
+            if (this._tabsBox) {
+                let prev = null;
+                for (const entry of this._tabs) {
+                    this._tabsBox.reorder_child_after(entry.tab, prev);
+                    prev = entry.tab;
+                }
+            }
+        }
+
+        if (current && this._isPageVisible(current)) {
+            this._index = this._pages.indexOf(current);
+        } else {
+            const firstVisible = this._pages.findIndex(p => this._isPageVisible(p));
+            if (firstVisible >= 0) {
+                this._index = firstVisible;
+                if (current) current.setActive(false);
+                this._pager.set_visible_child(this._pages[this._index]);
+                if (!this._settingsActive && !this._assistantActive) {
+                    this._pages[this._index].setActive(this._active);
+                }
+            }
+        }
+
+        this._syncTabs();
+        this._updateHeader();
+        this._syncHeight();
+    }
+
+    applyHeaderConfig({ showAssistantBtn = true, showHeaderBars = true } = {}) {
+        if (this._micButton) {
+            this._micButton.set_visible(Boolean(showAssistantBtn));
+        }
+        this._showHeaderBars = Boolean(showHeaderBars);
+        if (this._headerBars) {
+            this._headerBars.set_visible(this._showHeaderBars);
+        }
+    }
+
     _nearestAvailable(index, direction) {
         for (let i = index + direction; i >= 0 && i < this._pages.length; i += direction) {
-            if (this._pages[i]?.available) return i;
+            if (this._isPageVisible(this._pages[i])) return i;
         }
         return null;
     }
@@ -779,7 +843,7 @@ export const ExpandedView = GObject.registerClass({
         this._tabs.forEach((entry, index) => {
             const { tab, icon: tabIcon, nameClip, badge, iconName, page } = entry;
             const open = index === this._index;
-            const available = page.available;
+            const available = this._isPageVisible(page);
 
             tab.set_visible(available);
             badge.set_visible(!open && Boolean(page.hasNews));
@@ -802,7 +866,7 @@ export const ExpandedView = GObject.registerClass({
         this._syncTabs();
         this._updateHeader();
         this._syncHeight();
-        if (page !== this.page || page.available) return;
+        if (page !== this.page || this._isPageVisible(page)) return;
         const index = this._nearestAvailable(this._index, 1) ?? this._nearestAvailable(this._index, -1);
         if (index !== null) {
             this.showPage(index);
@@ -854,7 +918,7 @@ export const ExpandedView = GObject.registerClass({
 
     _updateHeader() {
         // Equalizer Bars: show flat line when paused, bouncing when music is playing
-        this._headerBars.set_visible(true);
+        this._headerBars.set_visible(Boolean(this._showHeaderBars));
         this._headerBars.playing = this._active && Playback.isPlaying(this._daemon?.state?.nowPlaying);
 
         // Privacy indicator dots

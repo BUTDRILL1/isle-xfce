@@ -11,7 +11,8 @@ import Gtk from 'gi://Gtk?version=4.0';
 import Pango from 'gi://Pango';
 
 import * as Format from './format.js';
-import { paletteFor } from './bot.js';
+import { paletteFor, SHAPES } from './bot.js';
+import { getSettingsStore } from './settingsStore.js';
 import {
     getBatteryTelemetry,
     getCachedVolume,
@@ -47,6 +48,7 @@ export const CompactView = GObject.registerClass({
         this._daemon = daemon;
         this._isPeeking = false;
         this._peekTimerId = 0;
+        this._settingsStore = getSettingsStore();
 
         // Container Stack: Main resting view vs Notification Peek Banner
         this._stack = new Gtk.Stack({
@@ -172,6 +174,24 @@ export const CompactView = GObject.registerClass({
 
         this._syncCompactStats();
         this._syncVolumeLabel();
+        this._applyCompactConfig();
+
+        this._settingsUnsub = this._settingsStore.subscribe(
+            ['compact', 'bot', 'appearance', 'behavior', 'chargeLimit'],
+            (_state, topics) => {
+                if (topics.includes('*') || topics.includes('compact')) this._applyCompactConfig();
+                if (topics.includes('*') || topics.includes('bot')) this._syncBotPowerColor();
+                if (topics.includes('*') || topics.includes('chargeLimit') || topics.includes('appearance')) {
+                    this._syncBatteryCapColor();
+                }
+            }
+        );
+        this.connect('destroy', () => {
+            if (this._settingsUnsub) {
+                this._settingsUnsub();
+                this._settingsUnsub = null;
+            }
+        });
 
         mainRow.append(this._rightSlot);
         this._stack.add_named(mainRow, 'main');
@@ -334,6 +354,8 @@ export const CompactView = GObject.registerClass({
 
     showNotificationPeek(notification) {
         if (!notification) return;
+        const beh = this._settingsStore.get().behavior;
+        if (!beh.peekEnabled) return;
 
         // Populate peek alert details
         const title = (notification.title || notification.appName || 'Notification').replace(/\s+/g, ' ').trim();
@@ -368,8 +390,9 @@ export const CompactView = GObject.registerClass({
             this._peekTimerId = 0;
         }
 
-        // Auto-contract back to 240px after 3.8s
-        this._peekTimerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 3800, () => {
+        // Auto-contract back to 240px after configured duration
+        const peekDuration = this._settingsStore.get().behavior.peekDurationMs || 3800;
+        this._peekTimerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, peekDuration, () => {
             this._endPeek();
             return GLib.SOURCE_REMOVE;
         });
@@ -474,14 +497,28 @@ export const CompactView = GObject.registerClass({
         }
     }
 
+    _applyCompactConfig() {
+        const c = this._settingsStore.get().compact;
+        this._batStack?.set_visible(Boolean(c.showBattery));
+        this._botAvatar?.set_visible(Boolean(c.showBot));
+        this._dateLabel?.set_visible(Boolean(c.showDate));
+        this._wifiIndicator?.set_visible(Boolean(c.showWifi));
+        this._volStack?.set_visible(Boolean(c.showVolume));
+        this._privacyDots?.set_visible(Boolean(c.showPrivacyDots));
+    }
+
     _syncBotPowerColor() {
         if (!this._botAvatar) return;
-        const profile = getPowerProfile();
-        const hexColor = POWER_COLORS[profile] || '#30d158';
-        this._botAvatar.look = {
-            shape: 'cloud',
-            palette: paletteFor(hexColor, 'match'),
-        };
+        const botCfg = this._settingsStore.get().bot;
+        const shape = SHAPES[botCfg.shape] ? botCfg.shape : 'cloud';
+        const palette = botCfg.colorMode === 'fixed'
+            ? paletteFor(botCfg.color, botCfg.glow)
+            : paletteFor(POWER_COLORS[getPowerProfile()] || '#30d158', botCfg.glow);
+        this._botAvatar.look = { shape, palette };
+    }
+
+    _tickClock() {
+        this._tick();
     }
 
     _tick() {
@@ -489,6 +526,14 @@ export const CompactView = GObject.registerClass({
         this._clockLabel.set_text(parts.time);
         if (this._meridiemLabel && parts.meridiem) {
             this._meridiemLabel.set_text(parts.meridiem);
+            this._meridiemLabel.set_visible(true);
+        } else if (this._meridiemLabel) {
+            this._meridiemLabel.set_visible(false);
+        } else if (parts.meridiem) {
+            this._meridiemLabel = label(parts.meridiem, 'isle-compact-meridiem', {
+                valign: Gtk.Align.BASELINE,
+            });
+            this._centerBox.append(this._meridiemLabel);
         }
         const now = GLib.DateTime.new_now_local();
         const dateStr = now.format('%a') || '';
@@ -496,6 +541,10 @@ export const CompactView = GObject.registerClass({
     }
 
     destroy() {
+        if (this._settingsUnsub) {
+            this._settingsUnsub();
+            this._settingsUnsub = null;
+        }
         if (this._chargeLimitUnsub) {
             this._chargeLimitUnsub();
             this._chargeLimitUnsub = null;

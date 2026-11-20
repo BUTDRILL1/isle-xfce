@@ -15,6 +15,8 @@ import { ExpandedView } from './expanded.js';
 import { LightningOverlay } from './lightning.js';
 import { Page } from './page.js';
 import { NotificationCenter } from './notifications.js';
+import { getAuthStore } from './authStore.js';
+import { getSettingsStore } from './settingsStore.js';
 import { TalkbackView } from './talkback.js';
 import { AppsPage } from './pages/apps.js';
 import { CalendarPage } from './pages/calendar.js';
@@ -87,140 +89,12 @@ export function init() {
     const notificationCenter = new NotificationCenter();
     globalThis.isleNotifications = notificationCenter;
 
-    // 3b. Settings persistence, Glass Opacity & Battery Charge Limit controls
-    // Loaded before building pages so DevicesPage and SettingsPage read persisted values on init.
-    const settingsDir = GLib.build_filenamev([GLib.get_user_config_dir(), 'isle']);
-    const settingsPath = GLib.build_filenamev([settingsDir, 'settings.json']);
-
-    let currentGlassOpacity = 15;
-    globalThis.isleSoundEnabled = true;
-    globalThis.isleTabSwitchMode = 'hover';
-    globalThis.isleTabHoverHoldTime = 500;
-    globalThis.isleChargeLimitEnabled = true;
-    globalThis.isleChargeLimitPercent = 70;
-    globalThis.isleDndEnabled = false;
-    globalThis.islePowerProfile = null;
-    globalThis.isleWizSettings = {
-        musicTheme: 'rainbow',
-        musicSource: 'system',
-        screenRegion: 'full_screen',
-        fps: 20,
-        brightness: 80,
-    };
-    globalThis.isleCalendarViewMode = 'month';
-    globalThis.isleAlarmSettings = { hour: 7, min: 0, active: false };
-
-    const VALID_POWER_PROFILES = new Set(['power-saver', 'balanced', 'performance', 'lightning']);
-    const clampInt = (v, min, max, fallback) => {
-        const n = Math.round(Number(v));
-        return Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : fallback;
-    };
-    const clampChargeLimit = (v) => clampInt(v, 40, 95, 70);
+    // 3b. Centralized settings & auth initialization (loaded before building pages)
+    const settingsStore = getSettingsStore();
+    getAuthStore();
 
     const chargeLimitListeners = new Set();
-
-    const loadSettings = () => {
-        try {
-            const f = Gio.File.new_for_path(settingsPath);
-            if (f.query_exists(null)) {
-                const [ok, contents] = f.load_contents(null);
-                if (ok) {
-                    const data = JSON.parse(new TextDecoder().decode(contents));
-                    if (data.glassOpacity !== undefined) currentGlassOpacity = data.glassOpacity;
-                    if (data.clockFormat) Format.setClockFormat(data.clockFormat);
-                    if (data.soundEnabled !== undefined) globalThis.isleSoundEnabled = Boolean(data.soundEnabled);
-                    if (data.tabSwitchMode) globalThis.isleTabSwitchMode = data.tabSwitchMode;
-                    if (data.tabHoverHoldTime !== undefined) globalThis.isleTabHoverHoldTime = Number(data.tabHoverHoldTime);
-                    if (data.chargeLimitEnabled !== undefined) globalThis.isleChargeLimitEnabled = Boolean(data.chargeLimitEnabled);
-                    if (data.chargeLimitPercent !== undefined) globalThis.isleChargeLimitPercent = clampChargeLimit(data.chargeLimitPercent);
-                    if (data.dndEnabled !== undefined) globalThis.isleDndEnabled = Boolean(data.dndEnabled);
-                    if (typeof data.powerProfile === 'string' && VALID_POWER_PROFILES.has(data.powerProfile)) {
-                        globalThis.islePowerProfile = data.powerProfile;
-                    }
-                    if (data.wiz && typeof data.wiz === 'object') {
-                        const w = data.wiz;
-                        globalThis.isleWizSettings = {
-                            musicTheme: typeof w.musicTheme === 'string' ? w.musicTheme : 'rainbow',
-                            musicSource: w.musicSource === 'mic' ? 'mic' : 'system',
-                            screenRegion: typeof w.screenRegion === 'string' ? w.screenRegion : 'full_screen',
-                            fps: clampInt(w.fps, 5, 60, 20),
-                            brightness: clampInt(w.brightness, 10, 100, 80),
-                        };
-                    }
-                    if (data.calendarViewMode === 'week' || data.calendarViewMode === 'month') {
-                        globalThis.isleCalendarViewMode = data.calendarViewMode;
-                    }
-                    if (data.alarm && typeof data.alarm === 'object') {
-                        globalThis.isleAlarmSettings = {
-                            hour: clampInt(data.alarm.hour, 0, 23, 7),
-                            min: clampInt(data.alarm.min, 0, 59, 0),
-                            active: Boolean(data.alarm.active),
-                        };
-                    }
-                }
-            }
-        } catch (e) {
-            print('[Isle] Could not load settings:', e.message);
-        }
-    };
-
-    const saveSettings = () => {
-        try {
-            GLib.mkdir_with_parents(settingsDir, 0o755);
-            const w = globalThis.isleWizSettings || {};
-            const a = globalThis.isleAlarmSettings || {};
-            const data = {
-                glassOpacity: currentGlassOpacity,
-                clockFormat: Format.uses12Hour() ? '12h' : '24h',
-                soundEnabled: globalThis.isleSoundEnabled !== false,
-                tabSwitchMode: globalThis.isleTabSwitchMode || 'hover',
-                tabHoverHoldTime: globalThis.isleTabHoverHoldTime || 500,
-                chargeLimitEnabled: Boolean(globalThis.isleChargeLimitEnabled),
-                chargeLimitPercent: clampChargeLimit(globalThis.isleChargeLimitPercent),
-                dndEnabled: Boolean(globalThis.isleDndEnabled),
-                powerProfile: VALID_POWER_PROFILES.has(globalThis.islePowerProfile) ? globalThis.islePowerProfile : null,
-                wiz: {
-                    musicTheme: typeof w.musicTheme === 'string' ? w.musicTheme : 'rainbow',
-                    musicSource: w.musicSource === 'mic' ? 'mic' : 'system',
-                    screenRegion: typeof w.screenRegion === 'string' ? w.screenRegion : 'full_screen',
-                    fps: clampInt(w.fps, 5, 60, 20),
-                    brightness: clampInt(w.brightness, 10, 100, 80),
-                },
-                calendarViewMode: globalThis.isleCalendarViewMode === 'week' ? 'week' : 'month',
-                alarm: {
-                    hour: clampInt(a.hour, 0, 23, 7),
-                    min: clampInt(a.min, 0, 59, 0),
-                    active: Boolean(a.active),
-                },
-            };
-            const f = Gio.File.new_for_path(settingsPath);
-            f.replace_contents(JSON.stringify(data, null, 2), null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
-        } catch (e) {
-            print('[Isle] Could not save settings:', e.message);
-        }
-    };
-    globalThis.isleSaveSettings = saveSettings;
-
-    globalThis.isleGetChargeLimit = () => ({
-        enabled: Boolean(globalThis.isleChargeLimitEnabled),
-        percent: clampChargeLimit(globalThis.isleChargeLimitPercent),
-    });
-
-    globalThis.isleOnChargeLimitChanged = (fn) => {
-        chargeLimitListeners.add(fn);
-        return () => chargeLimitListeners.delete(fn);
-    };
-
-    globalThis.isleSetChargeLimit = ({ enabled, percent } = {}, { save = true } = {}) => {
-        if (enabled !== undefined) {
-            globalThis.isleChargeLimitEnabled = Boolean(enabled);
-        }
-        if (percent !== undefined) {
-            globalThis.isleChargeLimitPercent = clampChargeLimit(percent);
-        }
-        if (save) {
-            saveSettings();
-        }
+    const notifyChargeLimitListeners = () => {
         const snapshot = globalThis.isleGetChargeLimit();
         for (const fn of chargeLimitListeners) {
             try {
@@ -229,40 +103,124 @@ export function init() {
                 print('[Isle] Charge limit listener error:', e.message);
             }
         }
-        return snapshot;
     };
 
-    const glassProvider = new Gtk.CssProvider();
-    Gtk.StyleContext.add_provider_for_display(win.get_display(), glassProvider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 20);
+    globalThis.isleSaveSettings = () => settingsStore.save({ absorbGlobals: true });
+
+    globalThis.isleGetChargeLimit = () => {
+        const s = settingsStore.get();
+        return {
+            enabled: Boolean(s.chargeLimitEnabled),
+            percent: s.chargeLimitPercent,
+        };
+    };
+
+    globalThis.isleOnChargeLimitChanged = (fn) => {
+        chargeLimitListeners.add(fn);
+        return () => chargeLimitListeners.delete(fn);
+    };
+
+    globalThis.isleSetChargeLimit = ({ enabled, percent } = {}, { save = true } = {}) => {
+        settingsStore.update(s => {
+            if (enabled !== undefined) s.chargeLimitEnabled = Boolean(enabled);
+            if (percent !== undefined) s.chargeLimitPercent = percent;
+        }, 'chargeLimit', { save });
+        return globalThis.isleGetChargeLimit();
+    };
+
+    const hexToRgbTuple = (hex, fallback = '10, 132, 255') => {
+        if (typeof hex !== 'string' || !/^#[0-9a-f]{6}$/i.test(hex)) return fallback;
+        return [
+            parseInt(hex.slice(1, 3), 16),
+            parseInt(hex.slice(3, 5), 16),
+            parseInt(hex.slice(5, 7), 16),
+        ].join(', ');
+    };
+
+    const themeProvider = new Gtk.CssProvider();
+    Gtk.StyleContext.add_provider_for_display(win.get_display(), themeProvider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 20);
 
     const glArea = overlay.get_child();
 
-    globalThis.isleSetGlassOpacity = (percent) => {
-        currentGlassOpacity = percent;
-        saveSettings();
-        const val = percent > 1 ? percent / 100.0 : percent;
+    const applyThemeCss = () => {
+        const s = settingsStore.get();
+        const op = s.glassOpacity > 1 ? s.glassOpacity / 100.0 : s.glassOpacity;
         if (glArea && glArea.set_opacity) {
-            glArea.set_opacity(Math.min(1.0, val / 0.15));
+            glArea.set_opacity(Math.min(1.0, op / 0.15));
         }
-        glassProvider.load_from_string(`
+        const accent = s.appearance.accentColor || '#0a84ff';
+        const accRgb = hexToRgbTuple(accent, '10, 132, 255');
+        const chg = s.appearance.batteryChargingColor || '#30d158';
+        const cap = s.appearance.batteryCappedColor || '#0a84ff';
+        const capRgb = hexToRgbTuple(cap, '10, 132, 255');
+
+        themeProvider.load_from_string(`
             .isle-overlay {
-                background-color: rgba(20, 20, 22, ${val.toFixed(2)});
+                background-color: rgba(20, 20, 22, ${op.toFixed(2)});
+            }
+            .isle-pill-accent,
+            button.isle-settings-nav-btn.active,
+            .isle-settings-scale highlight {
+                background-color: ${accent};
+            }
+            .isle-settings-value,
+            .isle-header-settings.active {
+                color: ${accent};
+            }
+            .isle-output-chip.active {
+                background-color: rgba(${accRgb}, 0.28);
+            }
+            .isle-settings-tab-row.dragging {
+                background-color: rgba(${accRgb}, 0.24);
+                border-color: rgba(${accRgb}, 0.75);
+            }
+            entry.isle-settings-entry:focus-within,
+            passwordentry.isle-settings-entry:focus-within {
+                border-color: ${accent};
+            }
+            .isle-compact-vstat.charging .isle-compact-vdigit {
+                color: ${chg};
+            }
+            .isle-compact-vstat.capped .isle-compact-vdigit {
+                color: ${cap};
+            }
+            button.isle-battery-cap-btn.cap-active,
+            #isleIsland.isle-translucent button.isle-battery-cap-btn.cap-active,
+            #isleIsland.isle-glass-dark button.isle-battery-cap-btn.cap-active {
+                background-color: rgba(${capRgb}, 0.28);
+                border-color: rgba(${capRgb}, 0.55);
+                color: ${cap};
+            }
+            button.isle-battery-cap-btn.cap-active:hover,
+            #isleIsland.isle-translucent button.isle-battery-cap-btn.cap-active:hover,
+            #isleIsland.isle-glass-dark button.isle-battery-cap-btn.cap-active:hover {
+                background-color: rgba(${capRgb}, 0.38);
             }
         `);
     };
-    globalThis.isleGetGlassOpacity = () => currentGlassOpacity;
 
-    loadSettings();
-    globalThis.isleSetGlassOpacity(currentGlassOpacity);
+    globalThis.isleSetGlassOpacity = (percent, { save = true } = {}) => {
+        settingsStore.update(s => {
+            s.glassOpacity = percent;
+        }, 'appearance', { save });
+    };
+    globalThis.isleGetGlassOpacity = () => settingsStore.get().glassOpacity;
 
-    notificationCenter.dnd = Boolean(globalThis.isleDndEnabled);
+    applyThemeCss();
+    settingsStore.syncTtsMuteFlag();
+
+    let syncingDnd = false;
+    notificationCenter.dnd = Boolean(settingsStore.get().dndEnabled);
     notificationCenter.connect('dnd-changed', () => {
-        globalThis.isleDndEnabled = Boolean(notificationCenter.dnd);
-        saveSettings();
+        if (syncingDnd) return;
+        settingsStore.update(s => {
+            s.dndEnabled = Boolean(notificationCenter.dnd);
+        }, 'dnd');
     });
 
-    if (globalThis.islePowerProfile && globalThis.islePowerProfile !== getPowerProfile()) {
-        setPowerProfile(globalThis.islePowerProfile, null, { silent: true });
+    const initPower = settingsStore.get().powerProfile;
+    if (initPower && initPower !== getPowerProfile()) {
+        setPowerProfile(initPower, null, { silent: true });
     }
 
     // 4. Build authentic Page instances for the 10 canonical Isle tabs
@@ -307,6 +265,71 @@ export function init() {
     // 5. Mount CompactView and ExpandedView onto overlay
     const compactView = new CompactView(daemon);
     const expandedView = new ExpandedView(daemon, {}, {}, {}, pages);
+
+    const applyOpenMode = () => {
+        if (settingsStore.get().behavior.openMode === 'click') {
+            win.add_css_class('isle-click-to-open');
+        } else {
+            win.remove_css_class('isle-click-to-open');
+        }
+    };
+    const pushUsageConfig = () => {
+        if (daemon._proxies?.['usage']) {
+            daemon.call('usage', 'SetConfig', JSON.stringify(settingsStore.get().usage)).catch(() => {});
+        }
+    };
+    const pushLyricsConfig = () => {
+        if (daemon._proxies?.['media']) {
+            daemon.call('media', 'SetLyrics', Boolean(settingsStore.get().behavior.lyricsEnabled)).catch(() => {});
+        }
+    };
+
+    const initState = settingsStore.get();
+    expandedView.applyTabConfig(initState.tabs);
+    expandedView.applyHeaderConfig(initState.header);
+    applyOpenMode();
+    if (initState.tabs.defaultTab !== 'last') {
+        expandedView.showPage(initState.tabs.defaultTab, { animate: false });
+    }
+
+    daemon.connect('appeared', (_d, ifaceName) => {
+        if (ifaceName === 'media') pushLyricsConfig();
+        if (ifaceName === 'usage') pushUsageConfig();
+    });
+
+    settingsStore.subscribe('*', (state, topics) => {
+        if (topics.includes('*') || topics.includes('appearance')) {
+            applyThemeCss();
+        }
+        if (topics.includes('*') || topics.includes('tabs')) {
+            expandedView.applyTabConfig(state.tabs);
+        }
+        if (topics.includes('*') || topics.includes('header')) {
+            expandedView.applyHeaderConfig(state.header);
+        }
+        if (topics.includes('*') || topics.includes('behavior')) {
+            applyOpenMode();
+            pushLyricsConfig();
+        }
+        if (topics.includes('*') || topics.includes('usage')) {
+            pushUsageConfig();
+        }
+        if (topics.includes('*') || topics.includes('chargeLimit')) {
+            notifyChargeLimitListeners();
+        }
+        if (topics.includes('*') || topics.includes('clock')) {
+            expandedView._tickClock();
+            compactView._tickClock();
+        }
+        if (topics.includes('*') || topics.includes('assistant')) {
+            settingsStore.syncTtsMuteFlag();
+        }
+        if (topics.includes('*') || topics.includes('dnd')) {
+            syncingDnd = true;
+            notificationCenter.dnd = Boolean(state.dndEnabled);
+            syncingDnd = false;
+        }
+    });
 
     // Wire Dynamic Island notification peek alert onto compact notch
     notificationCenter.connect('banner', (_center, notification) => {
@@ -591,7 +614,22 @@ export function init() {
 
         // Check if an editable widget has focus in the window
         const focusWidget = win.get_focus();
-        if (focusWidget instanceof Gtk.Editable || focusWidget instanceof Gtk.Entry || focusWidget instanceof Gtk.TextView) {
+        const isEditing = Boolean(focusWidget && (
+            focusWidget instanceof Gtk.Editable ||
+            focusWidget instanceof Gtk.Entry ||
+            focusWidget instanceof Gtk.PasswordEntry ||
+            focusWidget instanceof Gtk.TextView ||
+            focusWidget.get_ancestor?.(Gtk.Editable)
+        ));
+        if (isEditing) {
+            return false;
+        }
+
+        if (expandedView.isSettingsOpen) {
+            if (keyval === Gdk.KEY_Escape) {
+                expandedView.toggleSettings(false);
+                return true;
+            }
             return false;
         }
 

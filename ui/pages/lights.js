@@ -12,6 +12,7 @@ import Gtk from 'gi://Gtk?version=4.0';
 
 import { Slider, icon, label } from '../widgets.js';
 import { Page } from '../page.js';
+import { getSettingsStore } from '../settingsStore.js';
 
 const WIZ_PYTHON = '/usr/bin/python3';
 const WIZ_BRIDGE = '/home/butarch/Desktop/isle-xfce/ui/wiz_bridge.py';
@@ -52,9 +53,11 @@ export const LightsPage = GObject.registerClass({
             available: true,
         });
 
-        const saved = globalThis.isleWizSettings || {};
+        this._settingsStore = getSettingsStore();
+        const saved = this._settingsStore.get().wiz || {};
         this._connected = false;
         this._bulbIp = null;
+        this._manualIp = saved.manualIp || '';
         this._powerOn = true;
         this._mode = 'static';
         this._musicTheme = MUSIC_THEMES.some(t => t.id === saved.musicTheme) ? saved.musicTheme : 'rainbow';
@@ -63,6 +66,7 @@ export const LightsPage = GObject.registerClass({
         this._brightness = Math.max(10, Math.min(100, Math.round(Number(saved.brightness) || 80)));
         this._fps = Math.max(5, Math.min(60, Math.round(Number(saved.fps) || 20)));
         this._syncingUi = false;
+        this._savingFromLights = false;
 
         this._proc = null;
         this._stdinStream = null;
@@ -70,6 +74,17 @@ export const LightsPage = GObject.registerClass({
 
         this._buildUi();
         this._startBridge();
+
+        this._settingsUnsub = this._settingsStore.subscribe('wiz', (state) => {
+            if (this._savingFromLights) return;
+            this._applyWizSettings(state.wiz);
+        });
+        this.connect('destroy', () => {
+            if (this._settingsUnsub) {
+                this._settingsUnsub();
+                this._settingsUnsub = null;
+            }
+        });
     }
 
     get available() {
@@ -97,6 +112,9 @@ export const LightsPage = GObject.registerClass({
                 base_stream: this._proc.get_stdout_pipe(),
             });
             this._readNextLine();
+            if (this._manualIp) {
+                this._send({ cmd: 'set_ip', ip: this._manualIp });
+            }
         } catch (e) {
             this._statusLbl.set_text('Bridge error');
             console.warn(`Isle WiZ: failed to start bridge: ${e.message}`);
@@ -152,14 +170,74 @@ export const LightsPage = GObject.registerClass({
     }
 
     _persistWiz() {
-        globalThis.isleWizSettings = {
-            musicTheme: this._musicTheme,
-            musicSource: this._musicSource,
-            screenRegion: this._screenRegion,
-            fps: this._fps,
-            brightness: this._brightness,
-        };
-        if (globalThis.isleSaveSettings) globalThis.isleSaveSettings();
+        this._savingFromLights = true;
+        try {
+            this._settingsStore.update(s => {
+                s.wiz = {
+                    musicTheme: this._musicTheme,
+                    musicSource: this._musicSource,
+                    screenRegion: this._screenRegion,
+                    fps: this._fps,
+                    brightness: this._brightness,
+                    manualIp: this._manualIp,
+                };
+            }, 'wiz');
+        } finally {
+            this._savingFromLights = false;
+        }
+    }
+
+    _applyWizSettings(w) {
+        if (!w) return;
+        this._syncingUi = true;
+        try {
+            if (MUSIC_THEMES.some(t => t.id === w.musicTheme) && w.musicTheme !== this._musicTheme) {
+                this._musicTheme = w.musicTheme;
+                for (const [id, b] of Object.entries(this._themeBtns || {})) {
+                    b.set_css_classes(['isle-output-chip', id === this._musicTheme ? 'active' : 'idle']);
+                }
+                if (this._mode === 'music') {
+                    this._send({ cmd: 'music', theme: this._musicTheme, source: this._musicSource });
+                }
+            }
+            const nextSource = w.musicSource === 'mic' ? 'mic' : 'system';
+            if (nextSource !== this._musicSource) {
+                this._musicSource = nextSource;
+                this._sourceBtn?.set_label(nextSource === 'system' ? 'System' : 'Mic');
+                if (this._mode === 'music') {
+                    this._send({ cmd: 'music', theme: this._musicTheme, source: this._musicSource });
+                }
+            }
+            if (SCREEN_REGIONS.some(r => r.id === w.screenRegion) && w.screenRegion !== this._screenRegion) {
+                this._screenRegion = w.screenRegion;
+                for (const [id, b] of Object.entries(this._regionBtns || {})) {
+                    b.set_css_classes(['isle-output-chip', id === this._screenRegion ? 'active' : 'idle']);
+                }
+                if (this._mode === 'screen') {
+                    this._send({ cmd: 'screen', region: this._screenRegion });
+                }
+            }
+            if (typeof w.brightness === 'number' && w.brightness !== this._brightness) {
+                this._brightness = Math.max(10, Math.min(100, Math.round(w.brightness)));
+                if (this._brightSlider) this._brightSlider.value = (this._brightness - 10) / 90;
+                this._brightVal?.set_text(`${this._brightness}%`);
+                this._send({ cmd: 'brightness', value: this._brightness });
+            }
+            if (typeof w.fps === 'number' && w.fps !== this._fps) {
+                this._fps = Math.max(5, Math.min(60, Math.round(w.fps)));
+                if (this._fpsSlider) this._fpsSlider.value = (this._fps - 5) / 55;
+                this._fpsVal?.set_text(`${this._fps} FPS · ${Math.round(1000 / this._fps)}ms`);
+                this._send({ cmd: 'fps', value: this._fps });
+            }
+            const nextIp = (w.manualIp || '').trim();
+            if (nextIp !== this._manualIp) {
+                this._manualIp = nextIp;
+                this._statusLbl?.set_text(nextIp ? `Connecting · ${nextIp}` : 'Scanning…');
+                this._send({ cmd: 'set_ip', ip: nextIp });
+            }
+        } finally {
+            this._syncingUi = false;
+        }
     }
 
     _updatePowerBtn() {

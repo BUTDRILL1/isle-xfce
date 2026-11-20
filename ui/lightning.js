@@ -9,6 +9,7 @@ import GObject from 'gi://GObject';
 import Gtk from 'gi://Gtk?version=4.0';
 
 import { getPowerProfile, getTelemetryMonitor, isAcPluggedIn } from './telemetry.js';
+import { getSettingsStore } from './settingsStore.js';
 
 const BOLT_COUNT = 12;
 
@@ -45,6 +46,14 @@ export const LightningOverlay = GObject.registerClass({
         const monitor = getTelemetryMonitor();
         monitor.connect('power-changed', () => this.refresh());
         monitor.connect('updated', () => this.refresh());
+        this._settingsStore = getSettingsStore();
+        this._settingsUnsub = this._settingsStore.subscribe('appearance', () => this.refresh());
+        this.connect('destroy', () => {
+            if (this._settingsUnsub) {
+                this._settingsUnsub();
+                this._settingsUnsub = null;
+            }
+        });
         this.refresh();
     }
 
@@ -73,7 +82,8 @@ export const LightningOverlay = GObject.registerClass({
     }
 
     refresh() {
-        const shouldRun = isAcPluggedIn() && getPowerProfile() === 'lightning';
+        const enabled = this._settingsStore?.get().appearance?.lightningOverlayEnabled !== false;
+        const shouldRun = enabled && isAcPluggedIn() && getPowerProfile() === 'lightning';
         if (shouldRun === this._active && (!shouldRun || this._timerId)) return;
         this._active = shouldRun;
 
@@ -186,6 +196,10 @@ export const LightningOverlay = GObject.registerClass({
     }
 
     destroy() {
+        if (this._settingsUnsub) {
+            this._settingsUnsub();
+            this._settingsUnsub = null;
+        }
         if (this._timerId) {
             GLib.source_remove(this._timerId);
             this._timerId = 0;

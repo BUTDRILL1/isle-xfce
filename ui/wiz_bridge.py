@@ -619,6 +619,31 @@ class BridgeState:
         with self.lock:
             if cmd == "scan":
                 self.scan()
+            elif cmd == "set_ip":
+                ip = (msg.get("ip") or "").strip()
+                if ip:
+                    self.ip = ip
+                    if self.music_engine is not None:
+                        self.music_engine.bulb_ip = ip
+                    if self.screen_engine is not None:
+                        self.screen_engine.bulb_ip = ip
+                    res = udp_rpc(self.ip, "getPilot", {}, timeout=0.6, broadcast=False)
+                    if res:
+                        _, pilot = res[0]
+                        if "dimming" in pilot and isinstance(pilot["dimming"], int):
+                            self.brightness = max(10, min(100, pilot["dimming"]))
+                        emit({
+                            "type": "scan",
+                            "connected": True,
+                            "ip": self.ip,
+                            "state": bool(pilot.get("state", False)),
+                            "dimming": pilot.get("dimming", self.brightness),
+                        })
+                    else:
+                        emit({"type": "scan", "connected": False, "ip": self.ip})
+                else:
+                    self.ip = None
+                    self.scan()
             elif cmd == "power":
                 on = bool(msg.get("on", True))
                 if not on:
