@@ -50,6 +50,7 @@ export const TABS = {
     apps: { icon: 'isle-apps', label: 'Apps' },
     devices: { icon: 'isle-headphones', label: 'Status' },
     lights: { icon: 'isle-bulb', label: 'Lights' },
+    quota: { icon: 'isle-quota', label: 'AI Quota' },
     usage: { icon: 'isle-gauge', label: 'Usage' },
 };
 

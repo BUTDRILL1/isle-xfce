@@ -20,6 +20,7 @@ export const TAB_CATALOG = [
     { id: 'apps', label: 'Apps', icon: 'isle-apps' },
     { id: 'devices', label: 'Status', icon: 'isle-headphones' },
     { id: 'lights', label: 'Lights', icon: 'isle-bulb' },
+    { id: 'quota', label: 'AI Quota', icon: 'isle-quota' },
     { id: 'usage', label: 'Usage', icon: 'isle-gauge' },
 ];
 
@@ -171,6 +172,7 @@ export function createDefaults() {
             claude: true,
             codex: true,
             grok: true,
+            antigravity: true,
             warn: 80,
             critical: 95,
         },

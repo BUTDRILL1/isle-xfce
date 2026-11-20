@@ -49,7 +49,7 @@ export const UsagePage = GObject.registerClass({
         });
         this.append(this._card);
 
-        this.watch(['usage', 'system'], () => this._update());
+        this.watch(['system'], () => this._update());
         this._update();
 
         this._monitor = getTelemetryMonitor();
@@ -82,16 +82,8 @@ export const UsagePage = GObject.registerClass({
             child = next;
         }
 
-        const providers = this._providers();
         const system = this._system();
-
-        if (providers.length > 0) {
-            // Render first provider's card (e.g. Claude / Codex)
-            this._renderProvider(providers[0]);
-        } else {
-            // Render System Telemetry & Diagnostic state (Wi-Fi, Battery, isled status)
-            this._renderSystemTelemetry(system);
-        }
+        this._renderSystemTelemetry(system);
     }
 
     _renderProvider(provider) {

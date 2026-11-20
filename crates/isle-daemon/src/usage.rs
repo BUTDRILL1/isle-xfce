@@ -87,6 +87,9 @@ struct Config {
     /// Missing from an older extension: on, like the setting's own default.
     #[serde(default = "on")]
     grok: bool,
+    /// Antigravity CLI (/usage) tracking.
+    #[serde(default = "on")]
+    antigravity: bool,
     /// The AI assistant turned on: off, a plan seen here starts no AI to list its models.
     #[serde(default = "on")]
     assistant: bool,
@@ -108,6 +111,7 @@ impl Default for Config {
             claude: true,
             codex: true,
             grok: true,
+            antigravity: true,
             assistant: true,
             warn: 80.0,
             critical: 95.0,
@@ -188,6 +192,8 @@ pub async fn run(iface: InterfaceRef<UsageService>, refresh: Arc<Notify>) {
     let mut grok_wait = CLAUDE_EVERY;
     let mut grok_failures = 0;
     let mut grok_last_error = None;
+    let mut antigravity: Option<Provider> = None;
+    let mut asked_antigravity: Option<Instant> = None;
     let mut codex = CodexReader::default();
     // Unlocking wakes the loop, to ask Claude if it came due meanwhile.
     let mut locked = crate::system::locked();
@@ -307,6 +313,33 @@ pub async fn run(iface: InterfaceRef<UsageService>, refresh: Arc<Notify>) {
                 providers.extend(read);
             }
         }
+        if config.antigravity && agy_signed_in() {
+            let due = |every| asked_antigravity.is_none_or(|at: Instant| at.elapsed() >= every);
+            if (forced && due(CLAUDE_AT_MOST)) || (!paused && due(CLAUDE_EVERY)) {
+                asked_antigravity = Some(Instant::now());
+                match tokio::task::spawn_blocking(read_antigravity).await {
+                    Ok(Ok(fresh)) => antigravity = Some(fresh),
+                    Ok(Err(err)) => {
+                        warn!("antigravity usage read failed: {err}");
+                        if antigravity.is_none() {
+                            antigravity = Some(Provider {
+                                id: "antigravity".into(),
+                                name: "Antigravity".into(),
+                                plan: "Google AI".into(),
+                                windows: Vec::new(),
+                                updated_ms: now_ms(),
+                                note: err.into(),
+                                empty: String::new(),
+                            });
+                        }
+                    }
+                    Err(err) => warn!("antigravity usage task failed: {err}"),
+                }
+            }
+            providers.extend(antigravity.clone());
+        } else {
+            antigravity = None;
+        }
         for provider in &mut providers {
             settle(provider, now_ms());
         }
@@ -333,10 +366,14 @@ pub async fn run(iface: InterfaceRef<UsageService>, refresh: Arc<Notify>) {
             .as_ref()
             .filter(|_| !paused)
             .map(|_| due_in(asked_grok, grok_wait));
-        let remote_due = match (claude_due_in, grok_due_in) {
-            (Some(claude_in), Some(grok_in)) => Some(claude_in.min(grok_in)),
-            (due, None) | (None, due) => due,
-        };
+        let agy_due_in = antigravity
+            .as_ref()
+            .filter(|_| !paused)
+            .map(|_| due_in(asked_antigravity, CLAUDE_EVERY));
+        let remote_due = [claude_due_in, grok_due_in, agy_due_in]
+            .into_iter()
+            .flatten()
+            .min();
         next = Some(next_wait(
             config.codex && !paused && codex_signed_in(),
             remote_due,
@@ -408,6 +445,130 @@ fn page_wait(last: Option<ClaudeError>) -> Option<Duration> {
 /// Whether Codex is signed in, so its logs may yet bring limits worth a look each minute.
 fn codex_signed_in() -> bool {
     crate::assistant::codex_home().join("auth.json").exists()
+}
+
+/// Locates the `agy` CLI binary in PATH or `~/.local/bin/agy`.
+fn agy_bin() -> Option<PathBuf> {
+    if let Some(paths) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&paths) {
+            let cand = dir.join("agy");
+            if cand.is_file() {
+                return Some(cand);
+            }
+        }
+    }
+    let fallback = dirs::home_dir()?.join(".local/bin/agy");
+    fallback.is_file().then_some(fallback)
+}
+
+/// Whether Antigravity CLI (`agy`) is installed and signed in.
+fn agy_signed_in() -> bool {
+    let Some(home) = dirs::home_dir() else {
+        return false;
+    };
+    let signed_in = [
+        ".gemini/antigravity-cli/antigravity-oauth-token",
+        ".gemini/jetski-standalone-oauth-token",
+    ]
+    .iter()
+    .any(|rel| home.join(rel).exists());
+    agy_bin().is_some() && signed_in
+}
+
+/// Queries `agy -p "/usage"` and parses the Quota table into used-percentage windows.
+fn read_antigravity() -> Result<Provider, &'static str> {
+    let bin = agy_bin().ok_or("Antigravity CLI not found")?;
+    let out = std::process::Command::new(bin)
+        .args(["-p", "/usage"])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|_| "Failed to run agy -p /usage")?;
+    if !out.status.success() {
+        warn!(
+            "agy -p /usage exited with {:?}: {}",
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+        return Err("agy -p /usage failed");
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    parse_agy_usage(&text, now_ms()).ok_or_else(|| {
+        warn!("no quota data in agy stdout ({} bytes)", text.len());
+        "No quota data in agy output"
+    })
+}
+
+/// Parses `agy -p "/usage"` stdout (TSV when piped) into a `Provider`.
+fn parse_agy_usage(output: &str, updated_ms: i64) -> Option<Provider> {
+    use chrono::{DateTime, Local, NaiveDateTime, TimeZone};
+
+    let mut windows = Vec::new();
+    for raw in output.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line == "Quota:" {
+            continue;
+        }
+        let cols: Vec<&str> = line.split('\t').map(str::trim).collect();
+        let (group, win_name, pct_str, ts_str) = if cols.len() >= 4 {
+            (cols[0], cols[1], cols[2], cols[3])
+        } else {
+            continue;
+        };
+
+        let Some(pct_num) = pct_str.strip_suffix('%') else {
+            continue;
+        };
+        let Ok(remaining) = pct_num.trim().parse::<f64>() else {
+            continue;
+        };
+        let used = (100.0 - remaining).clamp(0.0, 100.0);
+
+        let label = if group.contains("Gemini Models") && win_name.contains("Five Hour") {
+            "Gemini · 5h".to_string()
+        } else if group.contains("Gemini Models") && win_name.contains("Weekly") {
+            "Gemini · Weekly".to_string()
+        } else if group.contains("Claude and GPT") && win_name.contains("Five Hour") {
+            "Claude/GPT · 5h".to_string()
+        } else if group.contains("Claude and GPT") && win_name.contains("Weekly") {
+            "Claude/GPT · Weekly".to_string()
+        } else if group.contains("Gemini 4 Argon") {
+            "Argon · Weekly".to_string()
+        } else {
+            format!("{group} · {win_name}")
+        };
+
+        let resets_at_ms = DateTime::parse_from_rfc3339(ts_str)
+            .map(|dt| dt.timestamp_millis())
+            .ok()
+            .or_else(|| {
+                (ts_str.len() >= 16)
+                    .then(|| NaiveDateTime::parse_from_str(&ts_str[..16], "%Y-%m-%d %H:%M").ok())
+                    .flatten()
+                    .and_then(|dt| Local.from_local_datetime(&dt).earliest())
+                    .map(|dt| dt.timestamp_millis())
+            })
+            .unwrap_or(0);
+
+        windows.push(Window {
+            label,
+            percent: used,
+            resets_at_ms,
+        });
+    }
+
+    if windows.is_empty() {
+        return None;
+    }
+
+    Some(Provider {
+        id: "antigravity".into(),
+        name: "Antigravity".into(),
+        plan: "Google AI".into(),
+        windows,
+        updated_ms,
+        note: String::new(),
+        empty: String::new(),
+    })
 }
 
 /// Stores and signals new numbers; the same ones again send nothing.

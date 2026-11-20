@@ -1405,7 +1405,7 @@ export const SettingsPage = GObject.registerClass({
         const cardUsage = makeCard();
         const usageToggle = makeToggleRow(
             'Track AI Plan Usage',
-            'Monitor Claude, Codex, and Grok usage limits',
+            'Monitor Antigravity, Claude, Codex, and Grok usage limits',
             () => this._store.get().usage.enabled,
             v => this._store.update(s => { s.usage.enabled = v; }, 'usage')
         );
@@ -1413,7 +1413,7 @@ export const SettingsPage = GObject.registerClass({
 
         const usageProvRow = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 5, hexpand: true });
         const usageProvBtns = [];
-        for (const [k, lbl] of [['claude', 'Claude'], ['codex', 'Codex'], ['grok', 'Grok']]) {
+        for (const [k, lbl] of [['antigravity', 'Antigravity'], ['claude', 'Claude'], ['codex', 'Codex'], ['grok', 'Grok']]) {
             const btn = new Gtk.Button({ label: lbl, hexpand: true });
             btn.connect('clicked', () => {
                 this._store.update(s => { s.usage[k] = !s.usage[k]; }, 'usage');

@@ -28,6 +28,7 @@ import { ShelfPage } from './pages/shelf.js';
 import { TasksPage } from './pages/tasks.js';
 import { TimerPage } from './pages/timer.js';
 import { UsagePage } from './pages/usage.js';
+import { QuotaPage } from './pages/quota.js';
 import * as Format from './format.js';
 import { getPowerProfile, setPowerProfile } from './telemetry.js';
 
@@ -233,6 +234,7 @@ export function init() {
     const appsPage = new AppsPage(daemon);
     const devicesPage = new DevicesPage(daemon, { notificationCenter });
     const lightsPage = new LightsPage(daemon);
+    const quotaPage = new QuotaPage(daemon);
     const usagePage = new UsagePage(daemon);
 
     const callPage = new Page(daemon, {
@@ -259,6 +261,7 @@ export function init() {
         appsPage,          // apps
         devicesPage,       // devices
         lightsPage,        // lights
+        quotaPage,         // quota
         usagePage,         // usage
     ];
 
