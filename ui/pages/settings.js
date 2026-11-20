@@ -1284,7 +1284,29 @@ export const SettingsPage = GObject.registerClass({
             agy: 'agyModel',
         }[p] || 'nimModel');
 
-        // Card 1: Assistant Provider & CLI Auth Status
+        // Card 0: AI Mode (Isle Default vs Custom)
+        const cardMode = makeCard();
+        const modeInfo = makeTitleBox('AI Mode', 'Use Isle built-in NIM or pick a custom AI backend');
+        cardMode.append(modeInfo.box);
+        const aiModeChips = makeChipRows(
+            [{ id: 'default', label: 'Isle Default' }, { id: 'custom', label: 'Custom AI' }],
+            () => this._store.get().assistant.mode,
+            m => this._store.update(s => { s.assistant.mode = m; }, 'assistant'),
+            { perRow: 2 }
+        );
+        cardMode.append(aiModeChips.widget);
+        col.append(cardMode);
+
+        const customRevealer = new Gtk.Revealer({
+            transition_type: Gtk.RevealerTransitionType.SLIDE_DOWN,
+            transition_duration: 160,
+            reveal_child: this._store.get().assistant.mode === 'custom',
+        });
+        const customCol = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 6, hexpand: true });
+        customRevealer.set_child(customCol);
+        col.append(customRevealer);
+
+        // Card 1: Assistant Provider & CLI Auth Status (Custom)
         const cardProv = makeCard();
         cardProv.append(makeTitleBox('Assistant Provider', 'Select AI backend and check local sign-in status').box);
         const provChips = makeChipRows(
@@ -1297,9 +1319,9 @@ export const SettingsPage = GObject.registerClass({
 
         const statusListBox = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 3, hexpand: true });
         cardProv.append(statusListBox);
-        col.append(cardProv);
+        customCol.append(cardProv);
 
-        // Card 2: Model Selection
+        // Card 2: Model Selection (Custom)
         const cardModel = makeCard();
         const modelInfo = makeTitleBox('Model Selection', 'Pick a preset or enter a custom model ID');
         cardModel.append(modelInfo.box);
@@ -1329,7 +1351,7 @@ export const SettingsPage = GObject.registerClass({
         modelBtn.set_size_request(56, 26);
         modelRow.append(modelBtn);
         cardModel.append(modelRow);
-        col.append(cardModel);
+        customCol.append(cardModel);
 
         // Card 3: Voice, Speech & Memory
         const cardVoice = makeCard();
@@ -1498,10 +1520,12 @@ export const SettingsPage = GObject.registerClass({
         vaultAddRow.append(vaultSecretEntry);
         vaultAddRow.append(vaultSaveBtn);
         cardVault.append(vaultAddRow);
-        col.append(cardVault);
+        customCol.append(cardVault);
 
         const syncAiAuth = () => {
             const st = this._store.get();
+            aiModeChips.sync();
+            customRevealer.set_reveal_child(st.assistant.mode === 'custom');
             provChips.sync();
             nimChips.sync();
             ttsToggle.sync();

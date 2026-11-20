@@ -153,6 +153,7 @@ export function createDefaults() {
             lyricsEnabled: true,
         },
         assistant: {
+            mode: 'default',
             provider: 'nim',
             nimModel: 'nvidia/nemotron-3.5-super-vl-120b-a12b',
             claudeModel: '',
@@ -317,6 +318,7 @@ export class SettingsStore {
 
         if (src.assistant && typeof src.assistant === 'object') {
             const a = src.assistant;
+            d.assistant.mode = a.mode === 'custom' ? 'custom' : 'default';
             if (typeof a.provider === 'string' && VALID_PROVIDERS.has(a.provider)) d.assistant.provider = a.provider;
             if (typeof a.nimModel === 'string' && a.nimModel.trim()) d.assistant.nimModel = a.nimModel.trim();
             for (const mk of ['claudeModel', 'codexModel', 'grokModel', 'opencodeModel', 'agyModel']) {
@@ -564,9 +566,10 @@ export class SettingsStore {
 
     buildAssistantContext() {
         const a = this._state.assistant;
+        const isCustom = a.mode === 'custom';
         return {
-            provider: a.provider,
-            nim_model: a.nimModel,
+            provider: isCustom ? a.provider : 'nim',
+            nim_model: isCustom ? a.nimModel : 'nvidia/nemotron-3.5-super-vl-120b-a12b',
             claude_model: a.claudeModel,
             codex_model: a.codexModel,
             grok_model: a.grokModel,
