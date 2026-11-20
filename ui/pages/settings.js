@@ -103,6 +103,7 @@ function makeChipRows(items, getActiveId, onSelect, { perRow = 5 } = {}) {
                 label: item.label,
                 tooltip_text: item.tooltip || item.label,
                 hexpand: perRow <= 4,
+                focus_on_click: false,
             });
             styleChip(btn, item.id === getActiveId());
             btn.connect('clicked', () => {
@@ -133,6 +134,7 @@ function makeToggleRow(titleText, subtitleText, getVal, onToggle, { onLabel = 'O
         onToggle(next);
         sync();
     });
+    btn.set_focus_on_click(false);
     btn.set_size_request(width, 26);
 
     const sync = () => {
@@ -489,7 +491,7 @@ export const SettingsPage = GObject.registerClass({
                     sensitive: idx > 0,
                     focus_on_click: false,
                 });
-                upBtn.set_cursor(null);
+                upBtn.set_cursor_from_name('pointer');
                 upBtn.connect('clicked', () => this._store.moveTab(tabId, -1));
                 row.append(upBtn);
 
@@ -499,14 +501,14 @@ export const SettingsPage = GObject.registerClass({
                     sensitive: idx < visibleCount - 1,
                     focus_on_click: false,
                 });
-                downBtn.set_cursor(null);
+                downBtn.set_cursor_from_name('pointer');
                 downBtn.connect('clicked', () => this._store.moveTab(tabId, 1));
                 row.append(downBtn);
 
                 const hideBtn = new Gtk.Button({ label: 'Hide', focus_on_click: false });
                 styleChip(hideBtn, true);
                 hideBtn.set_size_request(54, 22);
-                hideBtn.set_cursor(null);
+                hideBtn.set_cursor_from_name('pointer');
                 hideBtn.connect('clicked', () => {
                     if (visibleCount <= 1) {
                         tabsHdr.subtitle.set_text('Keep at least one tab visible');
@@ -527,7 +529,7 @@ export const SettingsPage = GObject.registerClass({
                 hiddenHead.set_text(`HIDDEN (${hiddenIds.length})`);
                 for (const tabId of hiddenIds) {
                     const meta = TAB_META.get(tabId);
-                    if (!meta) return;
+                    if (!meta) continue;
 
                     const row = new Gtk.Box({
                         orientation: Gtk.Orientation.HORIZONTAL,
@@ -546,6 +548,7 @@ export const SettingsPage = GObject.registerClass({
                     const showBtn = new Gtk.Button({ label: '+ Show', focus_on_click: false });
                     styleChip(showBtn, false);
                     showBtn.set_size_request(60, 22);
+                    showBtn.set_cursor_from_name('pointer');
                     showBtn.connect('clicked', () => this._store.setTabVisible(tabId, true));
                     row.append(showBtn);
                     hiddenListBox.append(row);

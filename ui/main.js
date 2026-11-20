@@ -423,6 +423,16 @@ export function init() {
             if (lastExpanded !== true) {
                 lastExpanded = true;
                 lightningOverlay.setExpanded(true);
+                const defTab = settingsStore.get().tabs.defaultTab;
+                if (
+                    defTab &&
+                    defTab !== 'last' &&
+                    !expandedView.isSettingsOpen &&
+                    !expandedView.isAssistantOpen &&
+                    !win.has_css_class('isle-force-expand')
+                ) {
+                    expandedView.showPage(defTab, { animate: false });
+                }
                 expandedView.setActive(true);
             }
         }
@@ -538,6 +548,7 @@ export function init() {
                         }
                     } else if (cmd === 'close') {
                         expandedView.toggleSettings(false);
+                        win.remove_css_class('isle-force-expand');
                     }
                 }
             }
