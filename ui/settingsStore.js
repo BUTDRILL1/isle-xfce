@@ -50,6 +50,28 @@ export const AI_PROVIDERS = [
     { id: 'grok', label: 'Grok' },
     { id: 'opencode', label: 'opencode' },
     { id: 'agy', label: 'Agy' },
+    { id: 'butler', label: 'BUTLER' },
+];
+
+export const BUTLER_BACKENDS = [
+    { id: 'nvidia', label: 'NIM' },
+    { id: 'gemini', label: 'Gemini' },
+    { id: 'claude', label: 'Claude' },
+    { id: 'ollama', label: 'Ollama' },
+];
+
+export const VOICE_MODES = [
+    { id: 'jenny', label: 'Isle (Jenny)' },
+    { id: 'alan', label: 'Butler (Alan)' },
+    { id: 'random', label: 'Random (2)' },
+];
+
+export const SPEECH_SPEEDS = [
+    { id: 0.85, label: '0.85×' },
+    { id: 1.0, label: '1.0×' },
+    { id: 1.2, label: '1.2×' },
+    { id: 1.4, label: '1.4×' },
+    { id: 1.6, label: '1.6×' },
 ];
 
 export const NIM_MODELS = [
@@ -77,6 +99,8 @@ const VALID_POWER_PROFILES = new Set(['power-saver', 'balanced', 'performance', 
 const VALID_MUSIC_THEMES = new Set(['rainbow', 'club', 'fire', 'ocean', 'sesh']);
 const VALID_SCREEN_REGIONS = new Set(['full_screen', 'top_center', 'mid_left', 'mid_right']);
 const VALID_PROVIDERS = new Set(AI_PROVIDERS.map(p => p.id));
+const VALID_BUTLER_BACKENDS = new Set(BUTLER_BACKENDS.map(b => b.id));
+const VALID_VOICE_MODES = new Set(VOICE_MODES.map(v => v.id));
 const VALID_WHISPER = new Set(WHISPER_MODELS);
 const VALID_KEEP_CHAT = new Set(KEEP_CHAT_OPTIONS.map(o => o.id));
 const VALID_LANGUAGES = new Set(LANGUAGE_OPTIONS.map(o => o.id));
@@ -162,6 +186,11 @@ export function createDefaults() {
             grokModel: '',
             opencodeModel: '',
             agyModel: '',
+            butlerBackend: 'nvidia',
+            butlerModel: '',
+            voiceMode: 'random',
+            speechSpeed: 1.0,
+            whistleWake: false,
             whisperModel: 'base',
             language: 'auto',
             keepChat: 'day',
@@ -323,9 +352,19 @@ export class SettingsStore {
             d.assistant.mode = a.mode === 'custom' ? 'custom' : 'default';
             if (typeof a.provider === 'string' && VALID_PROVIDERS.has(a.provider)) d.assistant.provider = a.provider;
             if (typeof a.nimModel === 'string' && a.nimModel.trim()) d.assistant.nimModel = a.nimModel.trim();
-            for (const mk of ['claudeModel', 'codexModel', 'grokModel', 'opencodeModel', 'agyModel']) {
+            for (const mk of ['claudeModel', 'codexModel', 'grokModel', 'opencodeModel', 'agyModel', 'butlerModel']) {
                 if (typeof a[mk] === 'string') d.assistant[mk] = a[mk].trim();
             }
+            if (typeof a.butlerBackend === 'string' && VALID_BUTLER_BACKENDS.has(a.butlerBackend)) {
+                d.assistant.butlerBackend = a.butlerBackend;
+            }
+            if (typeof a.voiceMode === 'string' && VALID_VOICE_MODES.has(a.voiceMode)) {
+                d.assistant.voiceMode = a.voiceMode;
+            }
+            if (typeof a.speechSpeed === 'number' && Number.isFinite(a.speechSpeed)) {
+                d.assistant.speechSpeed = Math.min(2.0, Math.max(0.5, a.speechSpeed));
+            }
+            if (a.whistleWake !== undefined) d.assistant.whistleWake = Boolean(a.whistleWake);
             if (typeof a.whisperModel === 'string' && VALID_WHISPER.has(a.whisperModel)) d.assistant.whisperModel = a.whisperModel;
             if (typeof a.language === 'string' && VALID_LANGUAGES.has(a.language)) d.assistant.language = a.language;
             if (typeof a.keepChat === 'string' && VALID_KEEP_CHAT.has(a.keepChat)) d.assistant.keepChat = a.keepChat;
@@ -577,6 +616,10 @@ export class SettingsStore {
             grok_model: a.grokModel,
             opencode_model: a.opencodeModel,
             agy_model: a.agyModel,
+            butler_backend: a.butlerBackend,
+            butler_model: a.butlerModel,
+            voice_mode: a.voiceMode,
+            speech_speed: Number(a.speechSpeed ?? 1.0),
             whisper_model: a.whisperModel,
             language: a.language,
             keep_chat: a.keepChat,

@@ -286,6 +286,11 @@ export function init() {
             daemon.call('media', 'SetLyrics', Boolean(settingsStore.get().behavior.lyricsEnabled)).catch(() => {});
         }
     };
+    const pushWhistleWakeConfig = () => {
+        if (daemon._proxies?.['assistant']) {
+            daemon.call('assistant', 'SetWhistleWake', Boolean(settingsStore.get().assistant.whistleWake)).catch(() => {});
+        }
+    };
 
     const initState = settingsStore.get();
     expandedView.applyTabConfig(initState.tabs);
@@ -298,6 +303,7 @@ export function init() {
     daemon.connect('appeared', (_d, ifaceName) => {
         if (ifaceName === 'media') pushLyricsConfig();
         if (ifaceName === 'usage') pushUsageConfig();
+        if (ifaceName === 'assistant') pushWhistleWakeConfig();
     });
 
     settingsStore.subscribe('*', (state, topics) => {
@@ -326,6 +332,7 @@ export function init() {
         }
         if (topics.includes('*') || topics.includes('assistant')) {
             settingsStore.syncTtsMuteFlag();
+            pushWhistleWakeConfig();
         }
         if (topics.includes('*') || topics.includes('dnd')) {
             syncingDnd = true;
@@ -446,6 +453,20 @@ export function init() {
         syncMorphProgress(isExpanded ? 300 : 38);
     };
 
+    const openTalkback = () => {
+        if (win.has_css_class('isle-mode-talkback') || talkbackView.isOpen) return;
+        if (expandedView.isAssistantOpen) {
+            expandedView.toggleAssistant(false);
+        }
+        win.remove_css_class('isle-force-expand');
+        win.remove_css_class('isle-mode-assistant');
+        talkbackVisualActive = true;
+        win.add_css_class('isle-mode-talkback');
+        talkbackView.open();
+        syncMorphProgress(Math.max(win.get_height(), 90));
+    };
+    daemon.connect('assistant-wake', () => openTalkback());
+
     syncMorphProgress(38);
 
     // IPC trigger for automated verification
@@ -486,15 +507,7 @@ export function init() {
                         if (win.has_css_class('isle-mode-talkback') || talkbackView.isOpen) {
                             talkbackView.close();
                         } else {
-                            if (expandedView.isAssistantOpen) {
-                                expandedView.toggleAssistant(false);
-                            }
-                            win.remove_css_class('isle-force-expand');
-                            win.remove_css_class('isle-mode-assistant');
-                            talkbackVisualActive = true;
-                            win.add_css_class('isle-mode-talkback');
-                            talkbackView.open();
-                            syncMorphProgress(Math.max(win.get_height(), 90));
+                            openTalkback();
                         }
                     } else if (cmd === 'close') {
                         if (win.has_css_class('isle-mode-talkback') || talkbackView.isOpen) {

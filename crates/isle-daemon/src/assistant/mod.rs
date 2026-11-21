@@ -10,6 +10,7 @@ mod agy;
 mod answer;
 mod apps;
 mod brain;
+mod butler;
 mod chat;
 mod check;
 mod child;
@@ -27,6 +28,7 @@ mod opencode;
 mod sign_in;
 mod system;
 mod tasks;
+mod wake;
 mod whisper;
 pub mod speak;
 
@@ -74,6 +76,7 @@ const UNDO_NEW_CHAT: Duration = Duration::from_secs(5);
 /// The AI stays up this long after its last use, so a follow-up needs no start-up; then it quits and its
 /// memory is freed. Opening the island starts it ahead of the request (see `Warm`).
 const KEEP_WARM: Duration = Duration::from_secs(3 * 60);
+const BUTLER_KEEP_WARM: Duration = Duration::from_secs(60);
 /// Starting the AI, or getting it ready, takes longer than this only when it is stuck.
 const START_TIMEOUT: Duration = Duration::from_secs(20);
 /// The window commands that tile a window, which only an updated extension knows.
@@ -173,6 +176,11 @@ pub struct Context {
     grok_model: String,
     opencode_model: String,
     nim_model: String,
+    butler_backend: String,
+    butler_model: String,
+    voice_mode: String,
+    #[serde(default = "default_speech_speed")]
+    speech_speed: f32,
     whisper_model: String,
     language: String,
     /// How long a quiet conversation is kept ("day", "idle-30m", "idle-2h"; see chat.rs).
@@ -186,6 +194,10 @@ pub struct Context {
     windows: Vec<Window>,
     /// The latest notifications, newest first; `None` unless the user lets the AI read them.
     notifications: Option<Vec<Notification>>,
+}
+
+fn default_speech_speed() -> f32 {
+    1.0
 }
 
 /// An open window as the extension sends it.
@@ -325,6 +337,8 @@ pub enum Command {
     ClearChat,
     /// A command started before isled restarted has ended: how, and its output.
     Settled(Box<tasks::Task>, tasks::Ended, String),
+    /// Toggle low-overhead whistle wake detector.
+    SetWhistleWake(bool),
 }
 
 /// The Assistant1 D-Bus object: its state and history for the island, and a line to the loop.
@@ -438,6 +452,17 @@ impl AssistantService {
         speak::is_speaking()
     }
 
+    /// Enables or disables the background whistle wake detector.
+    async fn set_whistle_wake(
+        &self,
+        enabled: bool,
+        #[zbus(connection)] connection: &Connection,
+        #[zbus(header)] header: Header<'_>,
+    ) -> fdo::Result<()> {
+        crate::caller::shell_only(connection, &header).await?;
+        self.send(Command::SetWhistleWake(enabled))
+    }
+
     /// The island closed: listening stops, and the AI and the speech model quit. A request being answered
     /// carries on in the background and quits once answered (see `Cancel`).
     async fn end(
@@ -540,6 +565,10 @@ impl AssistantService {
     /// The microphone's level (0..1) while listening, 20 times a second.
     #[zbus(signal)]
     async fn level(emitter: &SignalEmitter<'_>, level: f64) -> zbus::Result<()>;
+
+    /// Fired when the low-RAM whistle wake detector hears a sustained whistle.
+    #[zbus(signal)]
+    async fn wake(emitter: &SignalEmitter<'_>) -> zbus::Result<()>;
 }
 
 /// The helpers of one conversation; they quit when it ends.
@@ -581,6 +610,7 @@ impl Session {
             Provider::Grok => &context.grok_model,
             Provider::Opencode => &context.opencode_model,
             Provider::Nim => &context.nim_model,
+            Provider::Butler => &context.butler_model,
         };
         let catalog = self
             .catalogs
@@ -598,7 +628,7 @@ impl Session {
             Provider::Grok => grok::user_model().unwrap_or_default(),
             // opencode's, the model the user's own opencode would use.
             Provider::Opencode => opencode::user_model().unwrap_or_default(),
-            Provider::Agy => String::new(),
+            Provider::Agy | Provider::Butler => String::new(),
             Provider::Nim => nim::DEFAULT_MODEL.to_owned(),
         };
         let usable = |model: &str| {
@@ -1138,6 +1168,17 @@ pub async fn run(iface: InterfaceRef<AssistantService>, data: Sources, mut comma
     look_after_tasks(&iface, &mut following).await;
     // Nothing wakes the conversation's check but its time (see `chat_check_at`).
     let never = tokio::sync::Notify::new();
+    let (wake_enabled_tx, wake_enabled_rx) = tokio::sync::watch::channel(false);
+    let (wake_paused_tx, wake_paused_rx) = tokio::sync::watch::channel(false);
+    let wake_iface = iface.clone();
+    tokio::spawn(wake::run(wake_enabled_rx, wake_paused_rx, move || {
+        let iface_tx = wake_iface.clone();
+        tokio::spawn(async move {
+            if let Err(err) = AssistantService::wake(iface_tx.signal_emitter()).await {
+                warn!("could not send wake signal: {err}");
+            }
+        });
+    }));
     loop {
         let cool = cool_at;
         let cooling = async move {
@@ -1209,6 +1250,10 @@ pub async fn run(iface: InterfaceRef<AssistantService>, data: Sources, mut comma
                 None
             }
             Command::Listen(context) => {
+                let _ = wake_paused_tx.send(true);
+                tokio::task::yield_now().await;
+                speak::set_voice_mode(&context.voice_mode);
+                speak::set_speech_speed(context.speech_speed);
                 speak::begin_turn();
                 keep = Keep::parse(&context.keep_chat);
                 if talk.end_if_over(&mut session, keep) {
@@ -1231,6 +1276,9 @@ pub async fn run(iface: InterfaceRef<AssistantService>, data: Sources, mut comma
                 interrupted
             }
             Command::Ask(text, context) => {
+                let _ = wake_paused_tx.send(true);
+                speak::set_voice_mode(&context.voice_mode);
+                speak::set_speech_speed(context.speech_speed);
                 speak::begin_turn();
                 keep = Keep::parse(&context.keep_chat);
                 if talk.end_if_over(&mut session, keep) {
@@ -1364,12 +1412,21 @@ pub async fn run(iface: InterfaceRef<AssistantService>, data: Sources, mut comma
                 None
             }
             Command::Results(..) => None,
+            Command::SetWhistleWake(on) => {
+                let _ = wake_enabled_tx.send(on);
+                None
+            }
         };
+        let _ = wake_paused_tx.send(session.open);
         // Whatever came, the AI stays up a while longer from now.
-        cool_at = session
-            .brain
-            .is_some()
-            .then(|| tokio::time::Instant::now() + KEEP_WARM);
+        cool_at = session.brain.as_ref().map(|b| {
+            let duration = if matches!(b, brain::Brain::Butler(_)) {
+                BUTLER_KEEP_WARM
+            } else {
+                KEEP_WARM
+            };
+            tokio::time::Instant::now() + duration
+        });
     }
 }
 
@@ -1717,10 +1774,23 @@ async fn start_brain(
     let workspace = data_dir().join("assistant");
     session.catalogs = models::current();
     let (model, instead_of) = session.choice(provider);
+    let start_model = if provider == Provider::Butler {
+        format!(
+            "{}::{}",
+            if session.context.butler_backend.is_empty() {
+                "nvidia"
+            } else {
+                &session.context.butler_backend
+            },
+            model
+        )
+    } else {
+        model.clone()
+    };
     let instructions = session.instructions();
     let started = Brain::start(
         provider,
-        &model,
+        &start_model,
         session.conversation.as_deref(),
         &workspace,
         &instructions,
@@ -1942,7 +2012,11 @@ async fn until_cancelled<T>(
 /// end. The extension sends no new request while one runs (it reopens this one instead), so one is dropped.
 fn hold(command: Command, later: &mut VecDeque<Command>) {
     match command {
-        Command::NewChat | Command::UndoNewChat | Command::ClearChat | Command::Settled(..) => {
+        Command::NewChat
+        | Command::UndoNewChat
+        | Command::ClearChat
+        | Command::Settled(..)
+        | Command::SetWhistleWake(..) => {
             later.push_back(command);
         }
         _ => {}

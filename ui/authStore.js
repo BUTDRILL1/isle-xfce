@@ -281,6 +281,13 @@ export class AuthStore {
                 cliFound: Boolean(findProgram('agy', home)),
                 signInCmd: 'agy',
             },
+            {
+                id: 'butler',
+                name: 'BUTLER',
+                configured: this.hasNimKey() || this.listVaultEntries().some(e => /(gemini|google|claude|anthropic|nvidia|nim)/i.test(e.id)) || GLib.file_test(GLib.build_filenamev([home, 'Desktop', 'BUTLER', '.env']), GLib.FileTest.EXISTS),
+                cliFound: Boolean(findProgram('python3', home)) && GLib.file_test(GLib.build_filenamev([home, 'Desktop', 'BUTLER', 'src']), GLib.FileTest.IS_DIR),
+                signInCmd: null,
+            },
         ];
     }
 

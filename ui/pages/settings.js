@@ -18,11 +18,14 @@ import { COLORS, SHAPES, paletteFor } from '../bot.js';
 import {
     ACCENT_PRESETS,
     AI_PROVIDERS,
+    BUTLER_BACKENDS,
     INDICATOR_COLORS,
     KEEP_CHAT_OPTIONS,
     LANGUAGE_OPTIONS,
     NIM_MODELS,
     TAB_CATALOG,
+    VOICE_MODES,
+    SPEECH_SPEEDS,
     WHISPER_MODELS,
     getSettingsStore,
 } from '../settingsStore.js';
@@ -1321,6 +1324,47 @@ export const SettingsPage = GObject.registerClass({
         cardProv.append(statusListBox);
         customCol.append(cardProv);
 
+        // Card 1b: BUTLER Integration Settings
+        const butlerRevealer = new Gtk.Revealer({
+            transition_type: Gtk.RevealerTransitionType.SLIDE_DOWN,
+            transition_duration: 160,
+            reveal_child: this._store.get().assistant.provider === 'butler',
+        });
+        const butlerCard = makeCard();
+        butlerCard.append(makeTitleBox('BUTLER Integration', 'Configure BUTLER backend and model options').box);
+
+        const butlerBackendRow = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 8, valign: Gtk.Align.CENTER, hexpand: true });
+        butlerBackendRow.append(label('BUTLER Backend', 'isle-subtitle', { hexpand: true, halign: Gtk.Align.START }));
+        const butlerBackendChips = makeChipRows(
+            BUTLER_BACKENDS,
+            () => this._store.get().assistant.butlerBackend,
+            b => this._store.update(s => { s.assistant.butlerBackend = b; }, 'assistant'),
+            { perRow: 4 }
+        );
+        butlerBackendRow.append(butlerBackendChips.widget);
+        butlerCard.append(butlerBackendRow);
+
+        const butlerModelRow = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 8, valign: Gtk.Align.CENTER, hexpand: true });
+        butlerModelRow.append(label('BUTLER Model', 'isle-subtitle', { hexpand: true, halign: Gtk.Align.START }));
+        const butlerModelEntry = new Gtk.Entry({
+            placeholder_text: 'Default for backend',
+            hexpand: true,
+            css_classes: ['isle-settings-entry'],
+        });
+        const applyButlerModel = () => {
+            const val = butlerModelEntry.get_text().trim();
+            this._store.update(s => { s.assistant.butlerModel = val; }, 'assistant');
+        };
+        butlerModelEntry.connect('activate', applyButlerModel);
+        butlerModelEntry.connect('changed', () => {
+            this._store.update(s => { s.assistant.butlerModel = butlerModelEntry.get_text().trim(); }, 'assistant', { save: false, deferMs: 250 });
+        });
+        butlerModelRow.append(butlerModelEntry);
+        butlerCard.append(butlerModelRow);
+
+        butlerRevealer.set_child(butlerCard);
+        customCol.append(butlerRevealer);
+
         // Card 2: Model Selection (Custom)
         const cardModel = makeCard();
         const modelInfo = makeTitleBox('Model Selection', 'Pick a preset or enter a custom model ID');
@@ -1356,6 +1400,37 @@ export const SettingsPage = GObject.registerClass({
         // Card 3: Voice, Speech & Memory
         const cardVoice = makeCard();
         cardVoice.append(makeTitleBox('Voice, Speech & Memory', 'Speech recognition, TTS voice & chat retention').box);
+
+        const voiceModeRow = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 8, valign: Gtk.Align.CENTER, hexpand: true });
+        voiceModeRow.append(label('Voice Mode', 'isle-subtitle', { hexpand: true, halign: Gtk.Align.START }));
+        const voiceModeChips = makeChipRows(
+            VOICE_MODES,
+            () => this._store.get().assistant.voiceMode,
+            m => this._store.update(s => { s.assistant.voiceMode = m; }, 'assistant'),
+            { perRow: 3 }
+        );
+        voiceModeRow.append(voiceModeChips.widget);
+        cardVoice.append(voiceModeRow);
+
+        const speedRow = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 8, valign: Gtk.Align.CENTER, hexpand: true });
+        speedRow.append(label('Talkback Speed', 'isle-subtitle', { hexpand: true, halign: Gtk.Align.START }));
+        const speedChips = makeChipRows(
+            SPEECH_SPEEDS,
+            () => this._store.get().assistant.speechSpeed,
+            sp => this._store.update(s => { s.assistant.speechSpeed = sp; }, 'assistant'),
+            { perRow: 5 }
+        );
+        speedRow.append(speedChips.widget);
+        cardVoice.append(speedRow);
+
+        const whistleToggle = makeToggleRow(
+            'Whistle Wake Word',
+            'Whistle to open live talkback',
+            () => this._store.get().assistant.whistleWake,
+            v => this._store.update(s => { s.assistant.whistleWake = v; }, 'assistant')
+        );
+        cardVoice.append(whistleToggle.row);
+
         const ttsToggle = makeToggleRow(
             'TTS Voice Output',
             'Speak assistant replies via Piper TTS',
@@ -1527,6 +1602,19 @@ export const SettingsPage = GObject.registerClass({
             aiModeChips.sync();
             customRevealer.set_reveal_child(st.assistant.mode === 'custom');
             provChips.sync();
+            butlerRevealer.set_reveal_child(st.assistant.provider === 'butler');
+            butlerBackendChips.sync();
+            const butlerModelFocused = Boolean(
+                butlerModelEntry.get_root?.()?.get_focus?.() &&
+                (butlerModelEntry.get_root().get_focus() === butlerModelEntry ||
+                 butlerModelEntry.get_root().get_focus().is_ancestor?.(butlerModelEntry))
+            );
+            if (!butlerModelFocused) {
+                butlerModelEntry.set_text(st.assistant.butlerModel || '');
+            }
+            voiceModeChips.sync();
+            speedChips.sync();
+            whistleToggle.sync();
             nimChips.sync();
             ttsToggle.sync();
             langChips.sync();

@@ -92,7 +92,7 @@ export const TalkbackView = GObject.registerClass({
                 s.assistant.ttsEnabled = !nextMuted;
             }, 'assistant');
             this._settingsStore.syncTtsMuteFlag();
-            this._muteBtn.set_child(icon(this._isMuted ? 'isle-speaker-off-symbolic' : 'isle-speaker-2-symbolic', 12));
+            this._muteBtn.get_child()?.set_from_gicon(icon(this._isMuted ? 'isle-speaker-off-symbolic' : 'isle-speaker-2-symbolic', 12));
         }, { size: 12, accessibleName: 'Toggle TTS voice output' });
         bottomRow.append(this._muteBtn);
 
@@ -105,7 +105,7 @@ export const TalkbackView = GObject.registerClass({
             if (topics.includes('*') || topics.includes('assistant')) {
                 this._isMuted = !this._settingsStore.get().assistant.ttsEnabled;
                 this._settingsStore.syncTtsMuteFlag();
-                this._muteBtn?.set_child(icon(this._isMuted ? 'isle-speaker-off-symbolic' : 'isle-speaker-2-symbolic', 12));
+                this._muteBtn?.get_child()?.set_from_gicon(icon(this._isMuted ? 'isle-speaker-off-symbolic' : 'isle-speaker-2-symbolic', 12));
             }
         });
         this.connect('destroy', () => {
@@ -147,7 +147,7 @@ export const TalkbackView = GObject.registerClass({
 
         this._settingsStore.syncTtsMuteFlag();
         this._isMuted = !this._settingsStore.get().assistant.ttsEnabled;
-        this._muteBtn.set_child(icon(this._isMuted ? 'isle-speaker-off-symbolic' : 'isle-speaker-2-symbolic', 12));
+        this._muteBtn.get_child()?.set_from_gicon(icon(this._isMuted ? 'isle-speaker-off-symbolic' : 'isle-speaker-2-symbolic', 12));
 
         this._face.bot.restart();
         this._face.setForm('listening');

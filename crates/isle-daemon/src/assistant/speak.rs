@@ -5,11 +5,12 @@
 //! Uses Piper (`en_GB-jenny_dioco-medium`, Irish female accent) piped into `paplay`.
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{LazyLock, Mutex};
 
-const MODEL_REL: &str = "piper/voices/en_GB-jenny_dioco-medium.onnx";
+const JENNY_REL: &str = "piper/voices/en_GB-jenny_dioco-medium.onnx";
+const ALAN_REL: &str = "piper/voices/en_GB-alan-medium.onnx";
 const BIN_REL: &str = "piper/piper/piper";
 const MAX_SPOKEN_CHARS: usize = 700;
 
@@ -22,6 +23,9 @@ struct SpeakState {
     process: Option<PiperProcess>,
     spoken_chars: usize,
     finished: bool,
+    voice_mode: String,
+    active_model: PathBuf,
+    speech_speed: f32,
 }
 
 static STATE: LazyLock<Mutex<SpeakState>> = LazyLock::new(|| {
@@ -29,6 +33,9 @@ static STATE: LazyLock<Mutex<SpeakState>> = LazyLock::new(|| {
         process: None,
         spoken_chars: 0,
         finished: false,
+        voice_mode: "random".to_string(),
+        active_model: PathBuf::new(),
+        speech_speed: 1.0,
     })
 });
 
@@ -42,13 +49,79 @@ fn piper_bin() -> PathBuf {
     data_dir().join(BIN_REL)
 }
 
-fn model_path() -> PathBuf {
-    data_dir().join(MODEL_REL)
+fn jenny_path() -> PathBuf {
+    data_dir().join(JENNY_REL)
 }
 
-/// Checks if piper executable and the Jenny Dioco model are installed.
+fn alan_path() -> PathBuf {
+    data_dir().join(ALAN_REL)
+}
+
+/// Checks if piper executable and at least one model are installed.
 pub fn installed() -> bool {
-    piper_bin().is_file() && model_path().is_file()
+    piper_bin().is_file() && (jenny_path().is_file() || alan_path().is_file())
+}
+
+/// Sets the voice mode ("jenny" | "alan" | "random").
+pub fn set_voice_mode(mode: &str) {
+    let normalized = match mode.trim().to_lowercase().as_str() {
+        "jenny" => "jenny",
+        "alan" => "alan",
+        _ => "random",
+    };
+    if let Ok(mut state) = STATE.lock() {
+        state.voice_mode = normalized.to_string();
+    }
+}
+
+/// Sets speech playback speed multiplier (0.5..=2.0, default 1.0).
+pub fn set_speech_speed(speed: f32) {
+    let clamped = if speed.is_finite() {
+        speed.clamp(0.5, 2.0)
+    } else {
+        1.0
+    };
+    if let Ok(mut state) = STATE.lock() {
+        state.speech_speed = clamped;
+    }
+}
+
+fn pick_model(mode: &str, jenny_path: &Path, alan_exists: bool, jenny_exists: bool, rand_even: bool, alan_path: &Path) -> PathBuf {
+    match mode {
+        "jenny" => {
+            if jenny_exists {
+                jenny_path.to_path_buf()
+            } else if alan_exists {
+                alan_path.to_path_buf()
+            } else {
+                jenny_path.to_path_buf()
+            }
+        }
+        "alan" => {
+            if alan_exists {
+                alan_path.to_path_buf()
+            } else if jenny_exists {
+                jenny_path.to_path_buf()
+            } else {
+                alan_path.to_path_buf()
+            }
+        }
+        _ => {
+            if jenny_exists && alan_exists {
+                if rand_even {
+                    jenny_path.to_path_buf()
+                } else {
+                    alan_path.to_path_buf()
+                }
+            } else if jenny_exists {
+                jenny_path.to_path_buf()
+            } else if alan_exists {
+                alan_path.to_path_buf()
+            } else {
+                jenny_path.to_path_buf()
+            }
+        }
+    }
 }
 
 /// Checks if speech output is currently muted by user flag file.
@@ -65,6 +138,21 @@ pub fn begin_turn() {
     if let Ok(mut state) = STATE.lock() {
         state.spoken_chars = 0;
         state.finished = false;
+        let rand_even = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos()
+            & 1 == 0;
+        let j_path = jenny_path();
+        let a_path = alan_path();
+        state.active_model = pick_model(
+            &state.voice_mode,
+            &j_path,
+            a_path.is_file(),
+            j_path.is_file(),
+            rand_even,
+            &a_path,
+        );
     }
 }
 
@@ -222,9 +310,17 @@ fn ensure_process(state: &mut SpeakState) -> bool {
     }
 
     let mut piper_cmd = Command::new(piper_bin());
+    let model_to_use = if state.active_model.as_os_str().is_empty() {
+        jenny_path()
+    } else {
+        state.active_model.clone()
+    };
+    let length_scale = 1.0 / state.speech_speed.clamp(0.5, 2.0);
     piper_cmd
         .arg("--model")
-        .arg(model_path())
+        .arg(model_to_use)
+        .arg("--length_scale")
+        .arg(format!("{length_scale:.2}"))
         .arg("--output-raw")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -380,5 +476,27 @@ mod tests {
         assert_eq!(sentences[0], "First sentence.");
         assert_eq!(sentences[1], "Second sentence!");
         assert_eq!(input[consumed..].trim(), "Incomplete part");
+    }
+
+    #[test]
+    fn test_pick_model() {
+        let j = PathBuf::from("/jenny.onnx");
+        let a = PathBuf::from("/alan.onnx");
+
+        // Jenny mode
+        assert_eq!(pick_model("jenny", &j, true, true, true, &a), j);
+        assert_eq!(pick_model("jenny", &j, true, false, true, &a), a); // fallback
+
+        // Alan mode
+        assert_eq!(pick_model("alan", &j, true, true, true, &a), a);
+        assert_eq!(pick_model("alan", &j, false, true, true, &a), j); // fallback
+
+        // Random mode with both present
+        assert_eq!(pick_model("random", &j, true, true, true, &a), j);
+        assert_eq!(pick_model("random", &j, true, true, false, &a), a);
+
+        // Random mode with only jenny
+        assert_eq!(pick_model("random", &j, false, true, true, &a), j);
+        assert_eq!(pick_model("random", &j, false, true, false, &a), j);
     }
 }

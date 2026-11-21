@@ -10,6 +10,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use super::agy::{self, Agy};
 use super::answer::Answer;
+use super::butler::Butler;
 use super::claude::Claude;
 use super::codex::Codex;
 use super::grok::Grok;
@@ -25,16 +26,18 @@ pub enum Provider {
     Codex,
     Grok,
     Opencode,
+    Butler,
 }
 
 /// Tried in this order when the user picked "auto", signed-in ones first. agy comes last: its terms bar
 /// third-party tools, so it answers only when it is all there is, or picked.
-const AUTO: [Provider; 6] = [
+const AUTO: [Provider; 7] = [
     Provider::Nim,
     Provider::Claude,
     Provider::Codex,
     Provider::Grok,
     Provider::Opencode,
+    Provider::Butler,
     Provider::Agy,
 ];
 
@@ -48,6 +51,7 @@ impl Provider {
             Provider::Codex => "codex",
             Provider::Grok => "grok",
             Provider::Opencode => "opencode",
+            Provider::Butler => "butler",
         }
     }
 
@@ -60,6 +64,7 @@ impl Provider {
             Provider::Codex => "Codex",
             Provider::Grok => "Grok",
             Provider::Opencode => "opencode",
+            Provider::Butler => "BUTLER",
         }
     }
 
@@ -72,6 +77,7 @@ impl Provider {
             Provider::Codex => "codex",
             Provider::Grok => "grok",
             Provider::Opencode => "opencode",
+            Provider::Butler => "python3",
         }
     }
 
@@ -80,6 +86,9 @@ impl Provider {
     pub fn program(self) -> Option<PathBuf> {
         if self == Provider::Nim {
             return Some(std::env::current_exe().unwrap_or_else(|_| PathBuf::from("isled")));
+        }
+        if self == Provider::Butler {
+            return super::butler::python_bin();
         }
         let name = self.command();
         let home = dirs::home_dir().unwrap_or_default();
@@ -104,6 +113,7 @@ impl Provider {
             }
             Provider::Grok => super::grok::signed_in(),
             Provider::Opencode => super::opencode::signed_in(),
+            Provider::Butler => super::butler::signed_in(),
         }
     }
 
@@ -116,6 +126,7 @@ impl Provider {
             Provider::Codex => "codex login",
             Provider::Grok => "grok login",
             Provider::Opencode => "opencode auth login",
+            Provider::Butler => "add API key in Settings -> AI & Auth",
         }
     }
 
@@ -131,7 +142,7 @@ impl Provider {
     }
 
     /// Every provider, in "auto" order.
-    pub fn all() -> [Provider; 6] {
+    pub fn all() -> [Provider; 7] {
         AUTO
     }
 
@@ -242,6 +253,7 @@ pub enum Brain {
     Codex(Codex),
     Grok(Grok),
     Opencode(Opencode),
+    Butler(Butler),
 }
 
 impl Brain {
@@ -257,11 +269,15 @@ impl Brain {
         if provider == Provider::Nim {
             return Ok(Brain::Nim(Nim::start(model, resume, workspace, instructions).await?));
         }
+        if provider == Provider::Butler {
+            let (backend, actual_model) = model.split_once("::").unwrap_or(("nvidia", model));
+            return Ok(Brain::Butler(Butler::start(backend, actual_model, resume, workspace, instructions).await?));
+        }
         let program = provider.program().ok_or_else(|| {
             anyhow::anyhow!("could not start {}: no such file", provider.command())
         })?;
         Ok(match provider {
-            Provider::Nim => unreachable!(),
+            Provider::Nim | Provider::Butler => unreachable!(),
             Provider::Agy => Brain::Agy(Agy::start_program(&program, model, resume, workspace)?),
             Provider::Claude => Brain::Claude(Claude::start(
                 &program,
@@ -286,7 +302,7 @@ impl Brain {
     pub async fn warm(&mut self) -> anyhow::Result<()> {
         match self {
             Brain::Codex(codex) => codex.warm().await,
-            Brain::Nim(_) | Brain::Agy(_) | Brain::Claude(_) | Brain::Grok(_) | Brain::Opencode(_) => Ok(()),
+            Brain::Nim(_) | Brain::Agy(_) | Brain::Claude(_) | Brain::Grok(_) | Brain::Opencode(_) | Brain::Butler(_) => Ok(()),
         }
     }
 
@@ -299,6 +315,7 @@ impl Brain {
             Brain::Codex(_) => Provider::Codex,
             Brain::Grok(_) => Provider::Grok,
             Brain::Opencode(_) => Provider::Opencode,
+            Brain::Butler(_) => Provider::Butler,
         }
     }
 
@@ -317,6 +334,7 @@ impl Brain {
             Brain::Codex(codex) => codex.ask(prompt, activity, draft).await,
             Brain::Grok(grok) => grok.ask(prompt, activity, draft).await,
             Brain::Opencode(opencode) => opencode.ask(prompt, activity).await,
+            Brain::Butler(butler) => butler.ask(prompt, activity, draft).await,
         }
     }
 
@@ -329,13 +347,14 @@ impl Brain {
             Brain::Codex(codex) => codex.conversation.clone(),
             Brain::Grok(grok) => grok.conversation.clone(),
             Brain::Opencode(opencode) => opencode.conversation.clone(),
+            Brain::Butler(butler) => butler.conversation.clone(),
         }
     }
 
     /// Deletes the conversation `id` had with `provider` now: a chat that ended, or the eval's.
     pub fn forget(provider: Provider, id: &str) {
         match provider {
-            Provider::Nim => {}
+            Provider::Nim | Provider::Butler => {}
             Provider::Agy => agy::forget(id),
             Provider::Claude => super::claude::forget(id),
             Provider::Codex => super::codex::forget(id),

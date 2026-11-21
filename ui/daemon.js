@@ -199,7 +199,9 @@ const INTERFACES = {
             <method name="UndoNewChat"/>
             <method name="ClearChat"/>
             <method name="Speaking"><arg type="b" direction="out"/></method>
+            <method name="SetWhistleWake"><arg name="enabled" type="b" direction="in"/></method>
             <signal name="Level"><arg name="level" type="d"/></signal>
+            <signal name="Wake"/>
             <signal name="Notice"><arg name="text" type="s"/><arg name="ok" type="b"/></signal>
             <signal name="ModelSwitched"><arg name="provider" type="s"/><arg name="plan" type="s"/><arg name="picked" type="s"/><arg name="used" type="s"/></signal>
             <property name="State" type="s" access="read"/>
@@ -356,6 +358,9 @@ export class Daemon extends EventEmitter {
         case 'Level':
             this.emit('assistant-level', ...args);
             this.emit('voice-level', ...args);
+            break;
+        case 'Wake':
+            this.emit('assistant-wake');
             break;
         case 'Notice':
             this.emit('assistant-notice', ...args);
